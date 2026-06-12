@@ -1,0 +1,20 @@
+import { Outlet } from 'react-router-dom'
+import Navbar from './Navbar'
+
+export default function Layout() {
+  return (
+    <div className="min-h-screen bg-slate-900 dark:bg-slate-900 text-slate-100 transition-colors">
+      <Navbar />
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+        <Outlet />
+      </main>
+      <footer className="border-t border-slate-700/50 mt-16 py-8 text-center text-slate-500 text-sm">
+        <p>
+          MathVerse AI — Your complete mathematics learning platform{' '}
+          <span className="text-indigo-400">∑</span>
+        </p>
+        <p className="mt-1 text-xs">Powered by SymPy · FastAPI · React · Tailwind CSS</p>
+      </footer>
+    </div>
+  )
+}
