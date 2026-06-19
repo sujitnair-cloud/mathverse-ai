@@ -5,4 +5,4 @@ Allow: /
 Disallow: /api/
 Disallow: /admin
 
-Sitemap: https://mathverseai.com/sitemap.xml
+Sitemap: https://mathverseai.org/sitemap.xml
