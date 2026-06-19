@@ -289,10 +289,10 @@ async def _call_gemini_sdk(prompt: str, max_tokens: int = 1024) -> str:
         genai.configure(api_key=settings.GEMINI_API_KEY)
         models_to_try = [
             settings.GEMINI_MODEL,
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
             "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-            "gemini-pro",
+            "gemini-2.0-flash-lite",
         ]
         last_exc: Exception = RuntimeError("SDK: no model worked")
         for m in models_to_try:
@@ -321,17 +321,15 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
+    # Models confirmed available for AQ. format keys (from /v1/models listing)
+    # gemini-1.5-*, gemini-pro, gemini-1.0-pro return 404 for this key type
     models_to_try = list(dict.fromkeys([
         settings.GEMINI_MODEL,
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
         "gemini-2.0-flash",
-        "gemini-2.0-flash-exp",
         "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-pro-latest",
-        "gemini-pro",
-        "gemini-1.0-pro",
+        "gemini-2.0-flash-001",
     ]))
     api_versions = ["v1beta", "v1"]
 

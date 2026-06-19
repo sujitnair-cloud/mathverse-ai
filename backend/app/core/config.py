@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o"
     ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
-    GEMINI_MODEL: str = "gemini-1.5-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     # Database — Railway sets DATABASE_URL automatically for Postgres
     DATABASE_URL: str = "sqlite+aiosqlite:///./mathverse.db"

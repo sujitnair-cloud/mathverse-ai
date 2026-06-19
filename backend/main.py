@@ -94,7 +94,7 @@ async def llm_status():
         "contents": [{"parts": [{"text": "Reply with exactly one word: WORKING"}]}],
         "generationConfig": {"maxOutputTokens": 10},
     }
-    models_quick = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"]
+    models_quick = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
 
     # ── Phase 1: REST API with full error body capture ─────────────────────────
     async with httpx.AsyncClient(timeout=20) as client:
@@ -148,7 +148,7 @@ async def llm_status():
     def _sdk_test() -> str:
         import google.generativeai as genai  # type: ignore
         genai.configure(api_key=gemini_key)
-        for m in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"]:
+        for m in ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
             try:
                 model_obj = genai.GenerativeModel(m)
                 resp = model_obj.generate_content(
