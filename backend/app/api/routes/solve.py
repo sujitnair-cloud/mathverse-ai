@@ -125,7 +125,12 @@ async def solve_problem(
     if is_llm_first_problem(req.problem):
         # Word problem / proof / aptitude → skip SymPy, go straight to LLM
         llm_result = await llm_full_solve(req.problem, explanation_level)
-        if llm_result:
+        if llm_result and llm_result.get("_quota_exceeded"):
+            result["error"] = (
+                "Daily AI quota reached. Your question will be answered via the structured solver. "
+                "Quota resets at midnight UTC."
+            )
+        elif llm_result:
             explanation = llm_result.pop("explanation", None)
             result.update(llm_result)
         else:
@@ -146,7 +151,11 @@ async def solve_problem(
         )
         if sympy_failed:
             llm_result = await llm_full_solve(req.problem, explanation_level)
-            if llm_result:
+            if llm_result and llm_result.get("_quota_exceeded"):
+                result["error"] = (
+                    "Daily AI quota reached. Quota resets at midnight UTC."
+                )
+            elif llm_result:
                 explanation = llm_result.pop("explanation", None)
                 result.update(llm_result)
                 result["error"] = None

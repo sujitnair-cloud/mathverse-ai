@@ -9,10 +9,41 @@ Priority order:
 The fallback produces a complete, educationally accurate explanation so the app
 is fully useful even with no API keys set.
 """
+import hashlib
+import time
 import httpx
 import json
 from typing import Optional
 from app.core.config import settings
+
+# ── In-memory response cache ────────────────────────────────────────────────────
+# Identical problems (same text + difficulty) return a cached result instantly.
+# This dramatically reduces quota consumption when multiple users ask the same
+# or similar questions. Cache survives the process lifetime (cleared on restart).
+_SOLVE_CACHE: dict = {}   # llm_full_solve results
+_EXPL_CACHE: dict = {}    # get_explanation results
+_CACHE_TTL: int = 86400   # 24 hours in seconds
+_CACHE_MAX: int = 1000    # max entries before evicting oldest
+
+def _ck(*parts) -> str:
+    return hashlib.md5("|".join(str(p) for p in parts).encode()).hexdigest()
+
+def _cache_get(store: dict, key: str):
+    entry = store.get(key)
+    if entry and (time.monotonic() - entry["ts"]) < _CACHE_TTL:
+        return entry["v"]
+    store.pop(key, None)
+    return None
+
+def _cache_set(store: dict, key: str, value):
+    if len(store) >= _CACHE_MAX:
+        oldest_key = min(store, key=lambda k: store[k]["ts"])
+        del store[oldest_key]
+    store[key] = {"v": value, "ts": time.monotonic()}
+
+
+class QuotaExhaustedError(Exception):
+    """Raised when all Gemini models return HTTP 429 (daily quota exhausted)."""
 
 
 # ── Difficulty-level instructions ──────────────────────────────────────────────
@@ -298,8 +329,6 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
-    # gemini-2.5-flash-lite is fastest and confirmed working for this key type.
-    # Try it first, then the configured model, then other fallbacks.
     models_to_try = list(dict.fromkeys([
         "gemini-2.5-flash-lite",
         settings.GEMINI_MODEL,
@@ -309,14 +338,14 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     ]))
     api_versions = ["v1beta", "v1"]
 
-    # Phase 1: try REST API with all auth methods
     async with httpx.AsyncClient(timeout=60) as client:
         last_err: Exception = RuntimeError("No Gemini model responded successfully")
+        quota_exceeded_models: list = []
+
         for model in models_to_try:
             for api_ver in api_versions:
                 base_url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
                             f"{model}:generateContent")
-                # Three auth variants: header, query-param, bearer token
                 auth_variants = [
                     (base_url, {"x-goog-api-key": settings.GEMINI_API_KEY}),
                     (f"{base_url}?key={settings.GEMINI_API_KEY}", {}),
@@ -328,15 +357,15 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
                         resp = await client.post(url, json=payload, headers=extra_headers)
                         print(f"[MathVerse] {model}/{api_ver}/{auth_label} → HTTP {resp.status_code}", file=sys.stderr)
                         if resp.status_code == 404:
-                            break  # model not found in this api_ver
+                            break
                         if resp.status_code in (400, 401, 403):
                             print(f"[MathVerse] Error body: {resp.text[:300]}", file=sys.stderr)
-                            continue  # try next auth variant
+                            continue
                         if resp.status_code == 429:
                             print(f"[MathVerse] Quota exceeded for {model}", file=sys.stderr)
-                            break  # quota hit — skip all auth variants for this model
+                            quota_exceeded_models.append(model)
+                            break  # skip remaining auth variants for this model
                         resp.raise_for_status()
-                        # Gemini 2.5+ may prepend thought blocks; find the real response part
                         parts = resp.json()["candidates"][0]["content"]["parts"]
                         text = ""
                         for part in parts:
@@ -351,6 +380,12 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
                         last_err = e
                         continue
 
+        # If every model hit quota, raise a specific error so callers can show a friendly message
+        if len(quota_exceeded_models) >= len(models_to_try):
+            raise QuotaExhaustedError(
+                "Daily AI quota exhausted. The solver will reset at midnight UTC. "
+                "Upgrade to a paid Gemini API key for unlimited access."
+            )
     raise last_err
 
 
@@ -398,34 +433,59 @@ async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "i
     Return an explanation for a solved math problem.
     Tries the configured LLM provider first; falls back to the rich built-in
     explainer if no valid key is present or if the LLM call fails.
+    Results are cached 24 h so repeated identical questions cost zero quota.
     """
-    provider = settings.LLM_PROVIDER.lower()
+    cache_key = _ck(problem, difficulty)
+    cached = _cache_get(_EXPL_CACHE, cache_key)
+    if cached is not None:
+        return cached
 
-    # Only attempt LLM if the key looks like a real key
+    provider = settings.LLM_PROVIDER.lower()
+    result_text: str | None = None
+
     if provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY):
         try:
-            return await _call_anthropic(_build_prompt(problem, sympy_result, difficulty))
+            result_text = await _call_anthropic(_build_prompt(problem, sympy_result, difficulty))
+        except QuotaExhaustedError:
+            result_text = (
+                _rich_fallback(problem, sympy_result, difficulty)
+                + "\n\n---\n> **Note:** AI explanation quota reached for today. "
+                "The structured solution above is always available. Quota resets at midnight UTC."
+            )
         except Exception as e:
-            # Key exists but call failed (rate limit, network, etc.) — still use fallback
-            fallback = _rich_fallback(problem, sympy_result, difficulty)
-            return fallback + f"\n\n---\n*LLM error: {e}*"
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + f"\n\n---\n*LLM error: {e}*"
 
-    if provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
+    elif provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
         try:
-            return await _call_openai(_build_prompt(problem, sympy_result, difficulty))
+            result_text = await _call_openai(_build_prompt(problem, sympy_result, difficulty))
+        except QuotaExhaustedError:
+            result_text = (
+                _rich_fallback(problem, sympy_result, difficulty)
+                + "\n\n---\n> **Note:** AI explanation quota reached for today. Quota resets at midnight UTC."
+            )
         except Exception as e:
-            fallback = _rich_fallback(problem, sympy_result, difficulty)
-            return fallback + f"\n\n---\n*LLM error: {e}*"
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + f"\n\n---\n*LLM error: {e}*"
 
-    if provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
+    elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
         try:
-            return await _call_gemini(_build_prompt(problem, sympy_result, difficulty))
+            result_text = await _call_gemini(_build_prompt(problem, sympy_result, difficulty))
+        except QuotaExhaustedError:
+            result_text = (
+                _rich_fallback(problem, sympy_result, difficulty)
+                + "\n\n---\n> **Note:** AI explanation quota reached for today. "
+                "The structured solution above is always available. Quota resets at midnight UTC."
+            )
         except Exception as e:
-            fallback = _rich_fallback(problem, sympy_result, difficulty)
-            return fallback + f"\n\n---\n*LLM error: {e}*"
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + f"\n\n---\n*LLM error: {e}*"
 
-    # No valid key — return the rich structured explanation
-    return _rich_fallback(problem, sympy_result, difficulty)
+    if result_text is None:
+        result_text = _rich_fallback(problem, sympy_result, difficulty)
+
+    # Cache successful full LLM responses (not quota-notice fallbacks)
+    if "Quota resets at midnight UTC" not in result_text:
+        _cache_set(_EXPL_CACHE, cache_key, result_text)
+
+    return result_text
 
 
 async def llm_full_solve(problem: str, difficulty: str = "intermediate") -> Optional[dict]:
@@ -490,6 +550,12 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
   "explanation": "Brief explanation of the key concept used"
 }}"""
 
+    cache_key = _ck(problem, difficulty)
+    cached = _cache_get(_SOLVE_CACHE, cache_key)
+    if cached is not None:
+        print(f"[MathVerse] llm_full_solve: cache hit", file=sys.stderr)
+        return cached
+
     try:
         raw = ""
         if provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY):
@@ -502,7 +568,6 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
         print(f"[MathVerse] llm_full_solve raw (first 300 chars): {raw[:300]!r}", file=sys.stderr)
 
         if raw:
-            # Strip markdown fences
             raw_clean = _re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re.MULTILINE)
             raw_clean = _re.sub(r"```\s*$", "", raw_clean.strip(), flags=_re.MULTILINE)
 
@@ -512,20 +577,26 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
                 print(f"[MathVerse] llm_full_solve: no JSON braces found", file=sys.stderr)
             else:
                 json_str = raw_clean[start:end]
-                # Strategy 1: direct parse
+                parsed = None
                 try:
-                    return json.loads(json_str)
+                    parsed = json.loads(json_str)
                 except json.JSONDecodeError as e1:
                     print(f"[MathVerse] llm_full_solve: JSON parse failed ({e1}); trying backslash repair", file=sys.stderr)
+                    try:
+                        repaired = _repair_json_backslashes(json_str)
+                        parsed = json.loads(repaired)
+                    except json.JSONDecodeError as e2:
+                        print(f"[MathVerse] llm_full_solve: repaired JSON also failed ({e2})", file=sys.stderr)
+                        print(f"[MathVerse] Repaired JSON (first 400 chars): {repaired[:400]!r}", file=sys.stderr)
 
-                # Strategy 2: repair invalid JSON escape sequences (LaTeX backslashes)
-                try:
-                    repaired = _repair_json_backslashes(json_str)
-                    return json.loads(repaired)
-                except json.JSONDecodeError as e2:
-                    print(f"[MathVerse] llm_full_solve: repaired JSON also failed ({e2})", file=sys.stderr)
-                    print(f"[MathVerse] Repaired JSON (first 400 chars): {repaired[:400]!r}", file=sys.stderr)
+                if parsed is not None:
+                    _cache_set(_SOLVE_CACHE, cache_key, parsed)
+                    return parsed
 
+    except QuotaExhaustedError as qe:
+        print(f"[MathVerse] llm_full_solve: quota exhausted — {qe}", file=sys.stderr)
+        # Return a sentinel so solve.py can show a friendly quota message
+        return {"_quota_exceeded": True}
     except Exception as e:
         print(f"[MathVerse] llm_full_solve error: {e}", file=sys.stderr)
 
