@@ -44,9 +44,52 @@ def normalize_math_input(s: str) -> str:
     """Convert Unicode math symbols to ASCII equivalents SymPy can parse."""
     for uni, asc in UNICODE_MAP:
         s = s.replace(uni, asc)
-    # Replace ^ with **
     s = s.replace("^", "**")
     return s
+
+
+def preprocess_problem(problem: str) -> str:
+    """
+    Normalize informal, incomplete, or unusual math notation.
+    Tolerates missing brackets, trailing punctuation, natural-language prefixes,
+    informal spacing, etc.
+    """
+    p = problem.strip()
+    # Strip trailing punctuation that has no math meaning
+    p = re.sub(r"[.!?]+$", "", p).strip()
+    # Apply Unicode normalization
+    p = normalize_math_input(p)
+    # Remove natural-language prefixes: "what is", "find", "calculate", etc.
+    p = re.sub(
+        r"^(what\s+is|find\s+the|find|calculate|compute|evaluate|determine|give\s+me|tell\s+me|solve\s+for|solve)\s+",
+        "", p, flags=re.IGNORECASE,
+    ).strip()
+    # Add brackets to trig/log calls written without them: "sin 30" → "sin(30)"
+    for fn in ["sin", "cos", "tan", "asin", "acos", "atan", "log", "ln", "sqrt", "exp"]:
+        p = re.sub(rf"\b{fn}\s+([0-9a-zA-Z_]+(?:\.[0-9]+)?)\b", rf"{fn}(\1)", p, flags=re.IGNORECASE)
+    return p.strip()
+
+
+# ── LLM-first routing: problems SymPy can't meaningfully handle ────────────────
+_WORD_PROBLEM_RE = re.compile(
+    r"\b(a man|a woman|a train|a car|a boat|a pipe|a tank|a worker|a shopkeeper|"
+    r"a merchant|two pipes|two trains|two cars)\b"
+    r"|\bprove\b|\bshow\s+that\b|\bverify\s+that\b"
+    r"|\bin\s+how\s+many\s+ways\b"
+    r"|\b(ages?|years\s+old|years\s+ago|years\s+hence)\b"
+    r"|\b(profit|loss|discount|selling\s+price|cost\s+price|marked\s+price)\b"
+    r"|\b(mixture|alligation)\b"
+    r"|\biit[\s-]*jee\b|\bjee\s+(main|advanced)\b|\bolympiad\b|\baptitude\s+test\b",
+    re.IGNORECASE,
+)
+
+
+def is_llm_first_problem(problem: str) -> bool:
+    """
+    Return True when the problem should bypass SymPy and go straight to the LLM.
+    Catches word problems, proofs, applied/aptitude problems, and exam-style questions.
+    """
+    return bool(_WORD_PROBLEM_RE.search(problem))
 
 
 def safe_parse(expr_str: str) -> Any:
@@ -93,13 +136,42 @@ def detect_topic(problem: str) -> str:
     return "algebra_general"
 
 
+_EXPERT_KEYWORDS = (
+    "differential equation", "partial differential", "fourier", "laplace transform",
+    "contour integral", "residue theorem", "green's theorem", "stokes",
+    "eigenvector", "eigenvalue", "singular value",
+    "complex analysis", "real analysis", "abstract algebra", "topology",
+    "hilbert space", "banach space", "vector space", "linear transformation",
+    "triple integral", "line integral", "surface integral",
+    "lagrange multiplier", "taylor series", "maclaurin series",
+    "power series", "radius of convergence", "multivariable",
+    "jacobian", "hessian", "gradient descent",
+    "number theory", "modular arithmetic", "congruence modulo",
+    "generating function", "recurrence relation", "graph theory",
+    "binomial theorem", "proof by induction", "mathematical induction",
+    "iit", "jee", "olympiad", "putnam", "imo", "aime",
+    "aptitude", "cat exam", "gmat",
+)
+
+_ADVANCED_KEYWORDS = (
+    "parametric", "polar coordinates", "implicit differentiation",
+    "related rates", "convergence", "divergence test",
+    "complex number", "de moivre", "roots of unity",
+    "critical point", "inflection point", "system of equation",
+    "optimization",
+)
+
+
 def detect_difficulty(problem: str) -> str:
-    topic = detect_topic(problem)
-    advanced = ["calculus", "linear_algebra", "differential"]
-    intermediate = ["trigonometry", "quadratic", "logarithm", "polynomial", "statistics"]
-    if any(a in topic for a in advanced):
+    p = problem.lower()
+    if any(k in p for k in _EXPERT_KEYWORDS):
+        return "expert"
+    if any(k in p for k in _ADVANCED_KEYWORDS):
         return "advanced"
-    if any(i in topic for i in intermediate):
+    topic = detect_topic(problem)
+    if any(t in topic for t in ("calculus", "linear_algebra")):
+        return "advanced"
+    if any(t in topic for t in ("trigonometry", "quadratic", "logarithm", "polynomial", "statistics", "probability")):
         return "intermediate"
     return "basic"
 
@@ -109,8 +181,8 @@ def solve_expression(problem: str) -> Dict[str, Any]:
     Main entry point. Attempts to solve or simplify a math expression/equation.
     Returns a structured result with steps, latex, and answer.
     """
-    # Normalise Unicode math symbols before anything else
-    problem_clean = normalize_math_input(problem.strip())
+    # Normalise input — tolerates missing brackets, punctuation, natural language
+    problem_clean = preprocess_problem(problem)
 
     result = {
         "problem": problem,           # keep original for display

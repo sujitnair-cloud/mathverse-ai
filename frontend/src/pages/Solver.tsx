@@ -95,11 +95,20 @@ export default function Solver() {
   const [searchParams] = useSearchParams()
   const [input, setInput] = useState(searchParams.get('q') || '')
   const [difficulty, setDifficulty] = useState<Difficulty>('intermediate')
+  const [autoDetected, setAutoDetected] = useState(false)
   const [showSteps, setShowSteps] = useState(true)
   const [showExplanation, setShowExplanation] = useState(true)
   const { result, loading, error, limitHit, solve } = useSolver()
   const { user } = useAuth()
   const navigate = useNavigate()
+
+  // Auto-highlight the difficulty level the backend detected
+  useEffect(() => {
+    if (result?.difficulty && result.difficulty !== difficulty) {
+      setDifficulty(result.difficulty as Difficulty)
+      setAutoDetected(true)
+    }
+  }, [result]) // eslint-disable-line
 
   useEffect(() => {
     const q = searchParams.get('q')
@@ -111,6 +120,7 @@ export default function Solver() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    setAutoDetected(false)
     solve(input, difficulty)
   }
 
@@ -143,17 +153,22 @@ export default function Solver() {
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => setDifficulty(opt.value)}
+                onClick={() => { setDifficulty(opt.value); setAutoDetected(false) }}
                 className={clsx(
                   'px-3 py-1 rounded-lg text-xs font-medium transition-all',
                   difficulty === opt.value
-                    ? 'bg-indigo-500/30 border border-indigo-500/50 text-indigo-200'
+                    ? 'bg-indigo-500/30 border border-indigo-500/50 text-indigo-200 ring-1 ring-indigo-400/40'
                     : 'bg-slate-700/50 border border-slate-600 text-slate-400 hover:text-white'
                 )}
               >
                 {opt.label}
               </button>
             ))}
+            {autoDetected && (
+              <span className="text-xs bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full animate-pulse">
+                Auto-detected
+              </span>
+            )}
           </div>
 
           <div className="flex justify-between items-center">

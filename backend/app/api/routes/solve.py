@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.models import SolveHistory, User
-from app.services.math_engine import solve_expression
+from app.services.math_engine import solve_expression, is_llm_first_problem, detect_difficulty as auto_detect_difficulty
 from app.services.llm_service import get_explanation, llm_full_solve
 
 router = APIRouter()
@@ -102,28 +102,61 @@ async def solve_problem(
         solves_limit = ANON_LIMIT
 
     # ── Solve ─────────────────────────────────────────────────────────────────
-    # Run SymPy in a thread pool so it never blocks the event loop for other users
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, solve_expression, req.problem)
+    # Auto-detect difficulty from the problem text; use it when user hasn't overridden
+    detected_difficulty = auto_detect_difficulty(req.problem)
+    explanation_level = req.difficulty or detected_difficulty
 
-    # If SymPy couldn't handle the problem, let the LLM solve it completely
     explanation = None
-    answer_str = str(result.get("answer") or "")
-    sympy_failed = (
-        bool(result.get("error")) or
-        not result.get("answer") or
-        answer_str.startswith("Please ") or   # "Please specify shape..."
-        answer_str.startswith("See steps")    # generic fallback answer
-    )
-    if sympy_failed:
-        llm_result = await llm_full_solve(req.problem, req.difficulty or "intermediate")
+    # Default skeleton — always defined so the return block is safe
+    result: dict = {
+        "problem": req.problem,
+        "topic": "algebra_general",
+        "difficulty": detected_difficulty,
+        "steps": [],
+        "answer": None,
+        "latex_answer": None,
+        "alternate_method": None,
+        "formulas_used": [],
+        "common_mistakes": [],
+        "similar_problems": [],
+        "error": None,
+    }
+
+    if is_llm_first_problem(req.problem):
+        # Word problem / proof / aptitude → skip SymPy, go straight to LLM
+        llm_result = await llm_full_solve(req.problem, explanation_level)
         if llm_result:
             explanation = llm_result.pop("explanation", None)
             result.update(llm_result)
-            result["error"] = None
+        else:
+            # No LLM configured — try SymPy anyway
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, solve_expression, req.problem)
+    else:
+        # Standard path: SymPy first (non-blocking thread), LLM fallback if it fails
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, solve_expression, req.problem)
+
+        answer_str = str(result.get("answer") or "")
+        sympy_failed = (
+            bool(result.get("error")) or
+            not result.get("answer") or
+            answer_str.startswith("Please ") or
+            answer_str.startswith("See steps")
+        )
+        if sympy_failed:
+            llm_result = await llm_full_solve(req.problem, explanation_level)
+            if llm_result:
+                explanation = llm_result.pop("explanation", None)
+                result.update(llm_result)
+                result["error"] = None
+
+    # Propagate auto-detected difficulty onto result so frontend can highlight it
+    if not result.get("difficulty"):
+        result["difficulty"] = detected_difficulty
 
     if explanation is None and req.include_explanation:
-        explanation = await get_explanation(req.problem, result, req.difficulty)
+        explanation = await get_explanation(req.problem, result, explanation_level)
 
     # Persist to history
     history = SolveHistory(

@@ -246,7 +246,7 @@ Format in markdown. Be concise but complete. Do NOT repeat the step-by-step sinc
 
 
 # ── Provider calls ─────────────────────────────────────────────────────────────
-async def _call_anthropic(prompt: str) -> str:
+async def _call_anthropic(prompt: str, max_tokens: int = 1024) -> str:
     headers = {
         "x-api-key": settings.ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
@@ -254,16 +254,16 @@ async def _call_anthropic(prompt: str) -> str:
     }
     payload = {
         "model": settings.ANTHROPIC_MODEL,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
     }
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=45) as client:
         resp = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
         resp.raise_for_status()
         return resp.json()["content"][0]["text"]
 
 
-async def _call_openai(prompt: str) -> str:
+async def _call_openai(prompt: str, max_tokens: int = 1024) -> str:
     headers = {
         "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
         "Content-Type": "application/json",
@@ -271,19 +271,22 @@ async def _call_openai(prompt: str) -> str:
     payload = {
         "model": settings.OPENAI_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
     }
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=45) as client:
         resp = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _call_gemini(prompt: str) -> str:
+async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{settings.GEMINI_MODEL}:generateContent?key={settings.GEMINI_API_KEY}")
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    async with httpx.AsyncClient(timeout=30) as client:
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": max_tokens},
+    }
+    async with httpx.AsyncClient(timeout=45) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -346,37 +349,39 @@ async def llm_full_solve(problem: str, difficulty: str = "intermediate") -> Opti
         return None
 
     level_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["intermediate"])
-    prompt = f"""You are MathVerse AI, a world-class mathematics tutor. Solve this problem completely.
+    prompt = f"""You are MathVerse AI — an expert mathematics tutor capable of solving any problem from primary school arithmetic to IIT JEE, PhD-level research, and competitive olympiads.
 
 Problem: {problem}
-Explanation level: {level_instruction}
 
-Return ONLY a valid JSON object — no markdown fences, no extra text — with this exact structure:
+IMPORTANT RULES:
+- Solve completely regardless of complexity — advanced calculus, proofs, word problems, aptitude, number theory, all are fine.
+- Do NOT ask for clarification or say the problem is unclear. Make your best interpretation and solve it.
+- Ignore any typos, missing brackets, or informal notation — understand the user's intent.
+- Explanation style: {level_instruction}
+
+Return ONLY a valid JSON object (no markdown fences, no preamble, no trailing text):
 {{
-  "topic": "algebra_general",
-  "answer": "the final answer as a plain string",
+  "topic": "one of: algebra_general|algebra_quadratic|algebra_linear|algebra_polynomial|algebra_logarithm|calculus_differentiation|calculus_integration|calculus_limits|geometry|trigonometry|statistics|probability|linear_algebra|arithmetic_percent|number_theory|word_problem|differential_equations|combinatorics",
+  "difficulty": "one of: basic|intermediate|advanced|expert",
+  "answer": "the complete final answer as a clear string",
   "steps": [
-    {{"step": 1, "description": "what this step does", "expression": "the math here"}},
-    {{"step": 2, "description": "what this step does", "expression": "the math here"}}
+    {{"step": 1, "description": "what this step does and why", "expression": "the math expression or working"}},
+    {{"step": 2, "description": "next step", "expression": "math"}}
   ],
-  "formulas_used": ["Formula name 1", "Formula name 2"],
-  "common_mistakes": ["Mistake to avoid 1", "Mistake to avoid 2"],
-  "similar_problems": ["Practice problem 1", "Practice problem 2", "Practice problem 3"],
-  "explanation": "Clear explanation of the concept and why this method works. {level_instruction}"
-}}
-
-Valid topic values: algebra_general, algebra_quadratic, algebra_linear, algebra_polynomial,
-algebra_logarithm, calculus_differentiation, calculus_integration, calculus_limits,
-geometry, trigonometry, statistics, probability, linear_algebra, arithmetic_percent"""
+  "formulas_used": ["Complete formula 1 with name", "Complete formula 2 with name"],
+  "common_mistakes": ["Common error 1 students make", "Common error 2"],
+  "similar_problems": ["A related practice problem 1", "Related practice problem 2", "Related practice problem 3"],
+  "explanation": "Thorough explanation of the method, key concept, and why each step works. {level_instruction}"
+}}"""
 
     try:
         raw = ""
         if provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY):
-            raw = await _call_anthropic(prompt)
+            raw = await _call_anthropic(prompt, max_tokens=2048)
         elif provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
-            raw = await _call_openai(prompt)
+            raw = await _call_openai(prompt, max_tokens=2048)
         elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
-            raw = await _call_gemini(prompt)
+            raw = await _call_gemini(prompt, max_tokens=2048)
 
         if raw:
             start = raw.find("{")
