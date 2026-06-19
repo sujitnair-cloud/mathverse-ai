@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import { useSolver } from '../hooks/useSolver'
 import StepDisplay from '../components/StepDisplay'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
-import { Calculator, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronUp, BookOpen, AlertTriangle, Lightbulb } from 'lucide-react'
+import { Calculator, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronUp, BookOpen, AlertTriangle, Lightbulb, LogIn, Zap } from 'lucide-react'
 import type { Difficulty } from '../types'
 import clsx from 'clsx'
+import { useAuth } from '../context/AuthContext'
 
 // ── Custom markdown renderer ─────────────────────────────────────────────────
 const mdComponents: Components = {
@@ -96,7 +97,9 @@ export default function Solver() {
   const [difficulty, setDifficulty] = useState<Difficulty>('intermediate')
   const [showSteps, setShowSteps] = useState(true)
   const [showExplanation, setShowExplanation] = useState(true)
-  const { result, loading, error, solve } = useSolver()
+  const { result, loading, error, limitHit, solve } = useSolver()
+  const { user } = useAuth()
+  const navigate = useNavigate()
 
   useEffect(() => {
     const q = searchParams.get('q')
@@ -188,8 +191,42 @@ export default function Solver() {
         </div>
       </div>
 
-      {/* Error */}
-      {error && (
+      {/* Usage limit hit — sign-in / upgrade CTA */}
+      {limitHit && (
+        <div className="bg-gradient-to-br from-indigo-900/50 to-purple-900/40 border border-indigo-500/40 rounded-2xl p-6 mb-6">
+          <div className="flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center flex-shrink-0">
+              <Zap size={20} className="text-indigo-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-white font-semibold mb-1">
+                {user ? 'Daily limit reached' : 'Free solves used up'}
+              </p>
+              <p className="text-slate-300 text-sm mb-4">{error}</p>
+              {!user ? (
+                <button
+                  onClick={() => navigate('/login')}
+                  className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition-colors"
+                >
+                  <LogIn size={16} />
+                  Sign in with Google — it's free
+                </button>
+              ) : (
+                <button
+                  onClick={() => navigate('/pricing')}
+                  className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition-colors"
+                >
+                  <Zap size={16} />
+                  Upgrade to Pro
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error (non-limit errors) */}
+      {error && !limitHit && (
         <div className="flex items-start gap-3 bg-red-900/20 border border-red-500/30 rounded-xl p-4 mb-6">
           <AlertCircle size={18} className="text-red-400 flex-shrink-0 mt-0.5" />
           <p className="text-red-300 text-sm">{error}</p>

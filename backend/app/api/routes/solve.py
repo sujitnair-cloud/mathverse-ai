@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from datetime import datetime, timezone
 
 from app.core.database import get_db
@@ -20,7 +20,7 @@ PLAN_LIMITS = {
     "school":  9999,
 }
 
-ANON_DAILY_LIMIT = 5  # anonymous users (no login) get 5/day per session
+ANON_LIMIT = 3  # anonymous users get 3 solves ever, then must sign in
 
 
 class SolveRequest(BaseModel):
@@ -58,10 +58,10 @@ async def solve_problem(
 
     # ── Usage limit check ─────────────────────────────────────────────────────
     if current_user:
+        # Authenticated user — check daily plan limit
         plan = current_user.subscription_plan or "free"
         limit = PLAN_LIMITS.get(plan, 10)
 
-        # Reset daily count if it's a new day
         now = datetime.now(timezone.utc)
         reset_at = current_user.daily_solves_reset_at
         if reset_at is None or (now - reset_at).days >= 1:
@@ -72,7 +72,7 @@ async def solve_problem(
         if used >= limit:
             raise HTTPException(
                 status_code=429,
-                detail=f"Daily limit of {limit} solves reached. Upgrade your plan for unlimited access."
+                detail=f"You have used all {limit} free solves for today. Upgrade to Pro for unlimited access.",
             )
 
         current_user.daily_solves = used + 1
@@ -80,10 +80,25 @@ async def solve_problem(
         db.add(current_user)
         solves_used = used + 1
         solves_limit = limit
+
     else:
-        # Anonymous — no enforcement for now, just track session
-        solves_used = None
-        solves_limit = None
+        # Anonymous user — limit by session_id
+        session_id = req.session_id or "anonymous"
+        count_result = await db.execute(
+            select(func.count()).select_from(SolveHistory).where(
+                SolveHistory.session_id == session_id
+            )
+        )
+        anon_count = count_result.scalar() or 0
+
+        if anon_count >= ANON_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail=f"You have used {ANON_LIMIT} free solves. Sign in with Google for 10 free solves per day — it's free!",
+            )
+
+        solves_used = anon_count + 1
+        solves_limit = ANON_LIMIT
 
     # ── Solve ─────────────────────────────────────────────────────────────────
     result = solve_expression(req.problem)
