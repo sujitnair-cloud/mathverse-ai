@@ -302,7 +302,12 @@ async def _call_gemini_sdk(prompt: str, max_tokens: int = 1024) -> str:
                     prompt,
                     generation_config={"max_output_tokens": max_tokens},
                 )
-                text = resp.text
+                # resp.text raises if only thought parts exist; use parts directly
+                try:
+                    text = resp.text
+                except Exception:
+                    parts = resp.candidates[0].content.parts
+                    text = next((p.text for p in parts if not getattr(p, "thought", False)), parts[-1].text)
                 print(f"[MathVerse] Gemini SDK success: {m}", file=sys.stderr)
                 return text
             except Exception as e:
@@ -356,7 +361,15 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
                             print(f"[MathVerse] Gemini auth error {resp.status_code} ({model}/{api_ver}): {body}", file=sys.stderr)
                             continue  # try next auth variant
                         resp.raise_for_status()
-                        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        # Gemini 2.5+ may prepend thought blocks; find the real response part
+                        parts = resp.json()["candidates"][0]["content"]["parts"]
+                        text = ""
+                        for part in parts:
+                            if not part.get("thought", False) and "text" in part:
+                                text = part["text"]
+                                break
+                        if not text:
+                            text = parts[-1].get("text", "")
                         print(f"[MathVerse] Gemini REST success: {model} ({api_ver})", file=sys.stderr)
                         return text
                     except Exception as e:

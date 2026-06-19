@@ -133,7 +133,14 @@ async def llm_status():
                         r = await client.post(url, json=payload, headers=auth_h)
                         key_tag = f"rest_{model}_{label}"
                         if r.status_code == 200:
-                            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                            parts = r.json()["candidates"][0]["content"]["parts"]
+                            text = ""
+                            for part in parts:
+                                if not part.get("thought", False) and "text" in part:
+                                    text = part["text"]
+                                    break
+                            if not text:
+                                text = parts[-1].get("text", "")
                             result["test_call"] = "SUCCESS (REST)"
                             result["working_model"] = model
                             result["working_auth"] = label
