@@ -284,12 +284,7 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     import sys
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-            # Disable thinking mode on Gemini 2.5 — we need structured JSON, not reasoning traces.
-            # Older models (2.0, etc.) silently ignore this field.
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
+        "generationConfig": {"maxOutputTokens": max_tokens},
     }
     # gemini-2.5-flash-lite is fastest and confirmed working for this key type.
     # Try it first, then the configured model, then other fallbacks.
@@ -316,14 +311,18 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
                     (base_url, {"Authorization": f"Bearer {settings.GEMINI_API_KEY}"}),
                 ]
                 for url, extra_headers in auth_variants:
+                    auth_label = list(extra_headers.keys())[0] if extra_headers else "query-param"
                     try:
                         resp = await client.post(url, json=payload, headers=extra_headers)
+                        print(f"[MathVerse] {model}/{api_ver}/{auth_label} → HTTP {resp.status_code}", file=sys.stderr)
                         if resp.status_code == 404:
-                            break  # model not found in this api_ver; skip to next
-                        if resp.status_code in (401, 403):
-                            body = resp.text[:200]
-                            print(f"[MathVerse] Gemini auth error {resp.status_code} ({model}/{api_ver}): {body}", file=sys.stderr)
+                            break  # model not found in this api_ver
+                        if resp.status_code in (400, 401, 403):
+                            print(f"[MathVerse] Error body: {resp.text[:300]}", file=sys.stderr)
                             continue  # try next auth variant
+                        if resp.status_code == 429:
+                            print(f"[MathVerse] Quota exceeded for {model}", file=sys.stderr)
+                            break  # quota hit — skip all auth variants for this model
                         resp.raise_for_status()
                         # Gemini 2.5+ may prepend thought blocks; find the real response part
                         parts = resp.json()["candidates"][0]["content"]["parts"]
