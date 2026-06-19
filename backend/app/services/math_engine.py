@@ -116,18 +116,20 @@ def safe_parse(expr_str: str) -> Any:
 def detect_topic(problem: str) -> str:
     """Heuristically detect the math topic from a problem string."""
     p = problem.lower()
-    if any(k in p for k in ["integral", "integrate", "∫", "antiderivative"]):
+    if any(k in p for k in ["integral", "integrate", "antiderivative"]) or "∫" in p:
         return "calculus_integration"
-    if any(k in p for k in ["derivative", "differentiate", "d/dx", "gradient"]):
+    if any(k in p for k in ["derivative", "differentiate", "d/dx"]):
         return "calculus_differentiation"
-    if any(k in p for k in ["limit", "lim", "approaches"]):
+    # Use word boundary so "lim" in "limit" matches but not in "limits" of unrelated words
+    if re.search(r"\b(limit|lim|approaches)\b", p):
         return "calculus_limits"
     if any(k in p for k in ["matrix", "determinant", "eigenvalue", "inverse matrix"]):
         return "linear_algebra"
     # Geometry must come before trigonometry because "triangle" contains "angle"
     if any(k in p for k in ["area", "perimeter", "volume", "geometry", "triangle", "circle", "rectangle", "square", "pythagorean", "hypotenuse"]):
         return "geometry"
-    if any(k in p for k in ["sin", "cos", "tan", "angle", "degrees", "radians", "trigonometric"]):
+    # Use word boundaries to prevent "sin" matching inside "simultaneously", "cosine" in "discourse", etc.
+    if re.search(r"\b(sin|cos|tan|asin|acos|atan|sine|cosine|tangent|angle|degrees?|radians?|trigonometric)\b", p):
         return "trigonometry"
     if any(k in p for k in ["quadratic", "x²", "x^2", "x**2", "**2", "parabola"]):
         return "algebra_quadratic"

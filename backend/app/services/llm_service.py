@@ -280,16 +280,25 @@ async def _call_openai(prompt: str, max_tokens: int = 1024) -> str:
 
 
 async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
-    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-           f"{settings.GEMINI_MODEL}:generateContent?key={settings.GEMINI_API_KEY}")
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
+    # Try the configured model first, then fall back to flash (always available on free tier)
+    models_to_try = list(dict.fromkeys([settings.GEMINI_MODEL, "gemini-1.5-flash", "gemini-1.5-flash-8b"]))
     async with httpx.AsyncClient(timeout=45) as client:
-        resp = await client.post(url, json=payload)
-        resp.raise_for_status()
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        last_err: Exception = RuntimeError("No Gemini model available")
+        for model in models_to_try:
+            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                   f"{model}:generateContent?key={settings.GEMINI_API_KEY}")
+            try:
+                resp = await client.post(url, json=payload)
+                resp.raise_for_status()
+                return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception as e:
+                last_err = e
+                continue
+        raise last_err
 
 
 def _key_looks_real(key: str) -> bool:
