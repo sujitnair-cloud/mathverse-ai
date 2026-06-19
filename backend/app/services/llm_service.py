@@ -324,7 +324,12 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     import sys
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens},
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            # Disable thinking mode on Gemini 2.5 — we need structured JSON, not reasoning traces.
+            # Older models (2.0, etc.) silently ignore this field.
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
     }
     # Models confirmed available for AQ. format keys (from /v1/models listing)
     # gemini-1.5-*, gemini-pro, gemini-1.0-pro return 404 for this key type
