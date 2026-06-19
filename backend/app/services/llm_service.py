@@ -279,14 +279,48 @@ async def _call_openai(prompt: str, max_tokens: int = 1024) -> str:
         return resp.json()["choices"][0]["message"]["content"]
 
 
+async def _call_gemini_sdk(prompt: str, max_tokens: int = 1024) -> str:
+    """Use the google-generativeai Python SDK — handles AQ. key format natively."""
+    import asyncio
+    import sys
+
+    def _run_sync() -> str:
+        import google.generativeai as genai  # type: ignore
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        models_to_try = [
+            settings.GEMINI_MODEL,
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-pro",
+        ]
+        last_exc: Exception = RuntimeError("SDK: no model worked")
+        for m in models_to_try:
+            try:
+                model = genai.GenerativeModel(m)
+                resp = model.generate_content(
+                    prompt,
+                    generation_config={"max_output_tokens": max_tokens},
+                )
+                text = resp.text
+                print(f"[MathVerse] Gemini SDK success: {m}", file=sys.stderr)
+                return text
+            except Exception as e:
+                last_exc = e
+                print(f"[MathVerse] Gemini SDK {m} failed: {e}", file=sys.stderr)
+                continue
+        raise last_exc
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _run_sync)
+
+
 async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     import sys
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
-    # Try many model+version combos until one works.
-    # This handles API key restrictions, model deprecations, and regional differences.
     models_to_try = list(dict.fromkeys([
         settings.GEMINI_MODEL,
         "gemini-2.0-flash",
@@ -300,30 +334,46 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
         "gemini-1.0-pro",
     ]))
     api_versions = ["v1beta", "v1"]
+
+    # Phase 1: try REST API with all auth methods
     async with httpx.AsyncClient(timeout=45) as client:
         last_err: Exception = RuntimeError("No Gemini model responded successfully")
         for model in models_to_try:
             for api_ver in api_versions:
                 base_url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
                             f"{model}:generateContent")
-                # Try header auth first (required for newer AQ. keys), then query-param
+                # Three auth variants: header, query-param, bearer token
                 auth_variants = [
                     (base_url, {"x-goog-api-key": settings.GEMINI_API_KEY}),
                     (f"{base_url}?key={settings.GEMINI_API_KEY}", {}),
+                    (base_url, {"Authorization": f"Bearer {settings.GEMINI_API_KEY}"}),
                 ]
                 for url, extra_headers in auth_variants:
                     try:
                         resp = await client.post(url, json=payload, headers=extra_headers)
-                        if resp.status_code in (404, 400):
-                            break  # wrong model/version, try next
+                        if resp.status_code == 404:
+                            break  # model not found in this api_ver; skip to next
+                        if resp.status_code in (401, 403):
+                            body = resp.text[:200]
+                            print(f"[MathVerse] Gemini auth error {resp.status_code} ({model}/{api_ver}): {body}", file=sys.stderr)
+                            continue  # try next auth variant
                         resp.raise_for_status()
                         text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                        print(f"[MathVerse] Gemini success: {model} ({api_ver})", file=sys.stderr)
+                        print(f"[MathVerse] Gemini REST success: {model} ({api_ver})", file=sys.stderr)
                         return text
                     except Exception as e:
                         last_err = e
                         continue
-        raise last_err
+
+    # Phase 2: fall back to the Python SDK (handles AQ. key format natively)
+    print("[MathVerse] REST failed; trying google-generativeai SDK", file=sys.stderr)
+    try:
+        return await _call_gemini_sdk(prompt, max_tokens)
+    except Exception as sdk_err:
+        print(f"[MathVerse] SDK also failed: {sdk_err}", file=sys.stderr)
+        raise RuntimeError(
+            f"Gemini REST failed ({last_err}); SDK also failed ({sdk_err})"
+        ) from sdk_err
 
 
 def _key_looks_real(key: str) -> bool:
