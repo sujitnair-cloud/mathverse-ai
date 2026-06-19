@@ -331,6 +331,64 @@ async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "i
     return _rich_fallback(problem, sympy_result, difficulty)
 
 
+async def llm_full_solve(problem: str, difficulty: str = "intermediate") -> Optional[dict]:
+    """
+    Ask the configured LLM to fully solve a problem that SymPy couldn't handle.
+    Returns a dict matching solve_expression's output shape, or None if no LLM is available.
+    """
+    provider = settings.LLM_PROVIDER.lower()
+    has_llm = (
+        (provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY)) or
+        (provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY)) or
+        (provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY))
+    )
+    if not has_llm:
+        return None
+
+    level_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["intermediate"])
+    prompt = f"""You are MathVerse AI, a world-class mathematics tutor. Solve this problem completely.
+
+Problem: {problem}
+Explanation level: {level_instruction}
+
+Return ONLY a valid JSON object — no markdown fences, no extra text — with this exact structure:
+{{
+  "topic": "algebra_general",
+  "answer": "the final answer as a plain string",
+  "steps": [
+    {{"step": 1, "description": "what this step does", "expression": "the math here"}},
+    {{"step": 2, "description": "what this step does", "expression": "the math here"}}
+  ],
+  "formulas_used": ["Formula name 1", "Formula name 2"],
+  "common_mistakes": ["Mistake to avoid 1", "Mistake to avoid 2"],
+  "similar_problems": ["Practice problem 1", "Practice problem 2", "Practice problem 3"],
+  "explanation": "Clear explanation of the concept and why this method works. {level_instruction}"
+}}
+
+Valid topic values: algebra_general, algebra_quadratic, algebra_linear, algebra_polynomial,
+algebra_logarithm, calculus_differentiation, calculus_integration, calculus_limits,
+geometry, trigonometry, statistics, probability, linear_algebra, arithmetic_percent"""
+
+    try:
+        raw = ""
+        if provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY):
+            raw = await _call_anthropic(prompt)
+        elif provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
+            raw = await _call_openai(prompt)
+        elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
+            raw = await _call_gemini(prompt)
+
+        if raw:
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start != -1 and end > start:
+                return json.loads(raw[start:end])
+    except Exception:
+        pass
+
+    return None
+
+
 async def generate_quiz_questions(topic: str, difficulty: str, count: int = 5) -> list:
     """Generate quiz questions via LLM or local templates."""
     provider = settings.LLM_PROVIDER.lower()

@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -9,7 +10,7 @@ from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.models import SolveHistory, User
 from app.services.math_engine import solve_expression
-from app.services.llm_service import get_explanation
+from app.services.llm_service import get_explanation, llm_full_solve
 
 router = APIRouter()
 
@@ -101,10 +102,21 @@ async def solve_problem(
         solves_limit = ANON_LIMIT
 
     # ── Solve ─────────────────────────────────────────────────────────────────
-    result = solve_expression(req.problem)
+    # Run SymPy in a thread pool so it never blocks the event loop for other users
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, solve_expression, req.problem)
 
+    # If SymPy couldn't handle the problem, let the LLM solve it completely
     explanation = None
-    if req.include_explanation:
+    sympy_failed = bool(result.get("error")) or not result.get("answer")
+    if sympy_failed:
+        llm_result = await llm_full_solve(req.problem, req.difficulty or "intermediate")
+        if llm_result:
+            explanation = llm_result.pop("explanation", None)
+            result.update(llm_result)
+            result["error"] = None
+
+    if explanation is None and req.include_explanation:
         explanation = await get_explanation(req.problem, result, req.difficulty)
 
     # Persist to history
