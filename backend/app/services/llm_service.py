@@ -392,6 +392,41 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
         ) from sdk_err
 
 
+def _repair_json_backslashes(s: str) -> str:
+    """
+    Fix invalid JSON escape sequences that LLMs produce when writing LaTeX.
+    JSON only allows: \" \\ \/ \b \f \n \r \t \uXXXX
+    LaTeX sequences like \c \s \l \p \m \e etc. are invalid and break json.loads.
+    We double-escape them so \\cdot → \\\\cdot → decoded as \\cdot (literal backslash).
+    """
+    import re as _re
+    VALID_JSON_ESCAPES = set('"\\bfnrtu/')
+    result: list = []
+    i = 0
+    while i < len(s):
+        if s[i] == '\\' and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt in VALID_JSON_ESCAPES:
+                if nxt == 'u' and _re.match(r'[0-9A-Fa-f]{4}', s[i + 2:i + 6]):
+                    result.append(s[i:i + 6])  # valid \uXXXX
+                    i += 6
+                    continue
+                elif nxt == 'u':
+                    result.append('\\\\u')  # not a valid unicode escape
+                    i += 2
+                    continue
+                result.append(s[i:i + 2])  # valid 2-char escape
+                i += 2
+            else:
+                result.append('\\\\')  # double-escape the stray backslash
+                result.append(nxt)
+                i += 2
+        else:
+            result.append(s[i])
+            i += 1
+    return ''.join(result)
+
+
 def _key_looks_real(key: str) -> bool:
     """Return True only if the key is not a placeholder."""
     placeholders = {"sk-...", "sk-ant-...", "AIza...", "", "your-key-here", "sk-proj-..."}
@@ -473,46 +508,65 @@ PROBLEM:
 
 INSTRUCTIONS:
 - {multi_note}
-- Solve completely regardless of complexity (IIT JEE, olympiad, aptitude, word problems, proofs — all fine).
+- Solve completely regardless of complexity (IIT JEE, olympiad, aptitude, word problems — all fine).
 - Show ALL intermediate arithmetic steps. Define variables before using them.
-- For infinite series: state the formula S=a/(1-r) and verify |r|<1.
+- For infinite series: use S = a/(1-r) and verify |r| < 1.
 - Explanation style: {level_instruction}
 
-OUTPUT FORMAT — respond with ONLY this JSON object, nothing else before or after:
+OUTPUT FORMAT — respond with ONLY the JSON below. NO markdown fences, NO text before or after.
+IMPORTANT: In "expression" fields write plain arithmetic like "540/135 = 4" — do NOT use
+LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
+
 {{
   "topic": "word_problem",
   "difficulty": "expert",
-  "answer": "Complete answer for all parts here",
+  "answer": "Complete answer for all parts (e.g. Part 1: 4 hours. Part 2: 480 km.)",
   "steps": [
-    {{"step": 1, "description": "Step description with part label", "expression": "math working"}},
-    {{"step": 2, "description": "Next step", "expression": "math working"}}
+    {{"step": 1, "description": "Identify what is given and what to find", "expression": "Distance = 540 km, Speed_A = 60 km/h, Speed_B = 75 km/h"}},
+    {{"step": 2, "description": "Next calculation step", "expression": "plain arithmetic here"}}
   ],
-  "formulas_used": ["Formula name: formula expression"],
-  "common_mistakes": ["Mistake to avoid"],
-  "similar_problems": ["Similar practice problem"],
-  "explanation": "Explanation of key concepts and method"
+  "formulas_used": ["Relative speed = v1 + v2 (objects moving towards each other)"],
+  "common_mistakes": ["Trying to track each bird trip instead of using total time"],
+  "similar_problems": ["Two cars 400 km apart approach at 50 and 70 km/h. Find collision time."],
+  "explanation": "Brief explanation of the key concept used"
 }}"""
 
     try:
         raw = ""
         if provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY):
-            raw = await _call_anthropic(prompt, max_tokens=2048)
+            raw = await _call_anthropic(prompt, max_tokens=4096)
         elif provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
-            raw = await _call_openai(prompt, max_tokens=2048)
+            raw = await _call_openai(prompt, max_tokens=4096)
         elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
-            raw = await _call_gemini(prompt, max_tokens=2048)
+            raw = await _call_gemini(prompt, max_tokens=4096)
 
-        print(f"[MathVerse] llm_full_solve raw response (first 200 chars): {raw[:200]!r}", file=sys.stderr)
+        print(f"[MathVerse] llm_full_solve raw (first 300 chars): {raw[:300]!r}", file=sys.stderr)
 
         if raw:
-            # Strip markdown fences if present
+            # Strip markdown fences
             raw_clean = _re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re.MULTILINE)
             raw_clean = _re.sub(r"```\s*$", "", raw_clean.strip(), flags=_re.MULTILINE)
+
             start = raw_clean.find("{")
             end = raw_clean.rfind("}") + 1
-            if start != -1 and end > start:
-                return json.loads(raw_clean[start:end])
-            print(f"[MathVerse] llm_full_solve: no JSON found in response", file=sys.stderr)
+            if start == -1 or end <= start:
+                print(f"[MathVerse] llm_full_solve: no JSON braces found", file=sys.stderr)
+            else:
+                json_str = raw_clean[start:end]
+                # Strategy 1: direct parse
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError as e1:
+                    print(f"[MathVerse] llm_full_solve: JSON parse failed ({e1}); trying backslash repair", file=sys.stderr)
+
+                # Strategy 2: repair invalid JSON escape sequences (LaTeX backslashes)
+                try:
+                    repaired = _repair_json_backslashes(json_str)
+                    return json.loads(repaired)
+                except json.JSONDecodeError as e2:
+                    print(f"[MathVerse] llm_full_solve: repaired JSON also failed ({e2})", file=sys.stderr)
+                    print(f"[MathVerse] Repaired JSON (first 400 chars): {repaired[:400]!r}", file=sys.stderr)
+
     except Exception as e:
         print(f"[MathVerse] llm_full_solve error: {e}", file=sys.stderr)
 
