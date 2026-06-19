@@ -108,7 +108,13 @@ async def solve_problem(
 
     # If SymPy couldn't handle the problem, let the LLM solve it completely
     explanation = None
-    sympy_failed = bool(result.get("error")) or not result.get("answer")
+    answer_str = str(result.get("answer") or "")
+    sympy_failed = (
+        bool(result.get("error")) or
+        not result.get("answer") or
+        answer_str.startswith("Please ") or   # "Please specify shape..."
+        answer_str.startswith("See steps")    # generic fallback answer
+    )
     if sympy_failed:
         llm_result = await llm_full_solve(req.problem, req.difficulty or "intermediate")
         if llm_result:
