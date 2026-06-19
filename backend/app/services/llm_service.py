@@ -291,20 +291,19 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }
-    # Models confirmed available for AQ. format keys (from /v1/models listing)
-    # gemini-1.5-*, gemini-pro, gemini-1.0-pro return 404 for this key type
+    # gemini-2.5-flash-lite is fastest and confirmed working for this key type.
+    # Try it first, then the configured model, then other fallbacks.
     models_to_try = list(dict.fromkeys([
+        "gemini-2.5-flash-lite",
         settings.GEMINI_MODEL,
         "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
-        "gemini-2.0-flash-001",
     ]))
     api_versions = ["v1beta", "v1"]
 
     # Phase 1: try REST API with all auth methods
-    async with httpx.AsyncClient(timeout=45) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         last_err: Exception = RuntimeError("No Gemini model responded successfully")
         for model in models_to_try:
             for api_ver in api_versions:
@@ -483,11 +482,11 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
     try:
         raw = ""
         if provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY):
-            raw = await _call_anthropic(prompt, max_tokens=4096)
+            raw = await _call_anthropic(prompt, max_tokens=2048)
         elif provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
-            raw = await _call_openai(prompt, max_tokens=4096)
+            raw = await _call_openai(prompt, max_tokens=2048)
         elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
-            raw = await _call_gemini(prompt, max_tokens=4096)
+            raw = await _call_gemini(prompt, max_tokens=2048)
 
         print(f"[MathVerse] llm_full_solve raw (first 300 chars): {raw[:300]!r}", file=sys.stderr)
 

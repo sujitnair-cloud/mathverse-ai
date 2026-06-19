@@ -7,7 +7,7 @@ const BASE_URL = import.meta.env.VITE_API_URL
 
 const api = axios.create({
   baseURL: BASE_URL,
-  timeout: 30000,
+  timeout: 120000, // 2 minutes — LLM calls for complex problems can take 30-60s
 })
 
 // Attach JWT token from localStorage on every request
