@@ -72,14 +72,29 @@ def preprocess_problem(problem: str) -> str:
 
 # ── LLM-first routing: problems SymPy can't meaningfully handle ────────────────
 _WORD_PROBLEM_RE = re.compile(
+    # People / vehicles / objects in motion or transactions
     r"\b(a man|a woman|a train|a car|a boat|a pipe|a tank|a worker|a shopkeeper|"
-    r"a merchant|two pipes|two trains|two cars)\b"
-    r"|\bprove\b|\bshow\s+that\b|\bverify\s+that\b"
-    r"|\bin\s+how\s+many\s+ways\b"
-    r"|\b(ages?|years\s+old|years\s+ago|years\s+hence)\b"
-    r"|\b(profit|loss|discount|selling\s+price|cost\s+price|marked\s+price)\b"
-    r"|\b(mixture|alligation)\b"
-    r"|\biit[\s-]*jee\b|\bjee\s+(main|advanced)\b|\bolympiad\b|\baptitude\s+test\b",
+    r"a merchant|two pipes|two trains|two cars|two cyclists|two runners|a bird|"
+    r"a ball|a particle|a body|a projectile)\b"
+    # Proofs and verifications
+    r"|\bprove\b|\bshow\s+that\b|\bverify\s+that\b|\bprove\s+that\b"
+    # Combinatorics word problems
+    r"|\bin\s+how\s+many\s+ways\b|\bhow\s+many\s+ways\b"
+    # Age / time problems
+    r"|\b(ages?|years\s+old|years\s+ago|years\s+hence|days?\s+ago|months?\s+ago)\b"
+    # Commerce / finance
+    r"|\b(profit|loss|discount|selling\s+price|cost\s+price|marked\s+price|"
+    r"simple\s+interest|compound\s+interest|principal|rate\s+of\s+interest)\b"
+    # Mixing problems
+    r"|\b(mixture|alligation|concentration|solution\s+of)\b"
+    # Competitive exams
+    r"|\biit[\s-]*jee\b|\bjee\s+(main|advanced)\b|\bolympiad\b|\baptitude\s+test\b"
+    # Multi-part / challenge structure (numbered questions, 'Extra Challenge', 'Find:')
+    r"|\bextra\s+challenge\b|\bfind\s*:\s*\n|\b(part\s+[123]|question\s+[123])\b"
+    # Speed-distance-time word problems
+    r"|\bstarts?\s+(from|at)\s+station\b|\bkm\s+apart\b|\btowards?\s+each\s+other\b"
+    # Physics word problems
+    r"|\b(velocity|acceleration|projectile|momentum|force|gravity|freefall)\b",
     re.IGNORECASE,
 )
 

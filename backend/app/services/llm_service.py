@@ -349,30 +349,71 @@ async def llm_full_solve(problem: str, difficulty: str = "intermediate") -> Opti
         return None
 
     level_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["intermediate"])
-    prompt = f"""You are MathVerse AI — an expert mathematics tutor capable of solving any problem from primary school arithmetic to IIT JEE, PhD-level research, and competitive olympiads.
 
-Problem: {problem}
+    # Detect multi-part structure to guide LLM
+    import re as _re
+    sub_q_matches = _re.findall(
+        r"(?:^|\n)\s*(?:\d+[\.\)]\s|part\s+\d|extra\s+challenge|\(?\w\)\s)",
+        problem, _re.IGNORECASE | _re.MULTILINE,
+    )
+    multi_part_instruction = (
+        f"This problem has {len(sub_q_matches)} numbered parts/sub-questions. "
+        "Solve EVERY part completely. In 'answer', label each part: 'Part 1: ... Part 2: ... Extra Challenge: ...' "
+        "In 'steps', prefix each step with the part it belongs to, e.g. 'Part 1 — Setup'."
+        if len(sub_q_matches) >= 2 else
+        "Solve the complete problem with full working shown."
+    )
 
-IMPORTANT RULES:
-- Solve completely regardless of complexity — advanced calculus, proofs, word problems, aptitude, number theory, all are fine.
-- Do NOT ask for clarification or say the problem is unclear. Make your best interpretation and solve it.
-- Ignore any typos, missing brackets, or informal notation — understand the user's intent.
-- Explanation style: {level_instruction}
+    prompt = f"""You are MathVerse AI — a world-class mathematics tutor that solves any problem:
+primary school arithmetic, IIT JEE Main & Advanced, PhD research, olympiad (IMO/USAMO/Putnam),
+aptitude tests (CAT/GMAT/GRE), word problems, proofs, and competitive exams.
 
-Return ONLY a valid JSON object (no markdown fences, no preamble, no trailing text):
+Problem:
+{problem}
+
+STRICT RULES — follow every one:
+1. {multi_part_instruction}
+2. NEVER skip a sub-question. NEVER say the problem is ambiguous. Solve it.
+3. Ignore typos, missing brackets, informal notation — infer intent and solve.
+4. Show ALL intermediate arithmetic — do not skip from setup to answer.
+5. For word problems: define variables explicitly before using them.
+6. For geometric series / infinite sums: verify |r| < 1 and show the sum formula.
+7. Explanation depth: {level_instruction}
+
+Return ONLY a valid JSON object — absolutely no text before or after, no markdown code fences:
 {{
-  "topic": "one of: algebra_general|algebra_quadratic|algebra_linear|algebra_polynomial|algebra_logarithm|calculus_differentiation|calculus_integration|calculus_limits|geometry|trigonometry|statistics|probability|linear_algebra|arithmetic_percent|number_theory|word_problem|differential_equations|combinatorics",
-  "difficulty": "one of: basic|intermediate|advanced|expert",
-  "answer": "the complete final answer as a clear string",
+  "topic": "word_problem",
+  "difficulty": "expert",
+  "answer": "Part 1: 4 hours. Part 2: 480 km. Part 3: N crossings. Extra Challenge: X km (full numerical answer). — Replace these placeholders with your actual computed answers.",
   "steps": [
-    {{"step": 1, "description": "what this step does and why", "expression": "the math expression or working"}},
-    {{"step": 2, "description": "next step", "expression": "math"}}
+    {{"step": 1, "description": "Part 1 — Given data and variable definitions", "expression": "Distance XY = 540 km, Speed_A = 60 km/h, Speed_B = 75 km/h, Bird speed = 120 km/h"}},
+    {{"step": 2, "description": "Part 1 — Relative speed of trains (opposite directions)", "expression": "Relative speed = 60 + 75 = 135 km/h"}},
+    {{"step": 3, "description": "Part 1 — Time to collision", "expression": "t = 540 / 135 = 4 hours"}},
+    {{"step": 4, "description": "Part 2 — Key insight: bird flies for exactly t hours", "expression": "Bird distance = 120 × 4 = 480 km"}},
+    {{"step": 5, "description": "Part 3 — Midpoint crossing analysis", "expression": "Midpoint = 270 km from X. Analyse bird's legs..."}},
+    {{"step": 6, "description": "Extra Challenge — Speed reduction setup", "expression": "s_n = 120 × 0.9^(n-1), geometric series"}},
+    {{"step": 7, "description": "Extra Challenge — Sum the infinite series", "expression": "S = a/(1-r) = ..."}}
   ],
-  "formulas_used": ["Complete formula 1 with name", "Complete formula 2 with name"],
-  "common_mistakes": ["Common error 1 students make", "Common error 2"],
-  "similar_problems": ["A related practice problem 1", "Related practice problem 2", "Related practice problem 3"],
-  "explanation": "Thorough explanation of the method, key concept, and why each step works. {level_instruction}"
-}}"""
+  "formulas_used": [
+    "Relative speed (opposite directions) = v_A + v_B",
+    "Time to meet = Total distance / Relative speed",
+    "Bird total distance = Bird speed × Collision time (key insight — ignore individual legs)",
+    "Infinite geometric series: S = a / (1 - r), valid when |r| < 1"
+  ],
+  "common_mistakes": [
+    "Trying to calculate each individual leg of the bird's journey instead of using total time × speed",
+    "Using individual train speed instead of relative speed for collision time",
+    "Applying geometric series without confirming |r| < 1 (here r = 0.9 so it converges)"
+  ],
+  "similar_problems": [
+    "Two cyclists 300 km apart approach each other at 40 and 60 km/h. A fly at 80 km/h shuttles between them. Find total fly distance.",
+    "Trains of 150m and 100m cross each other in 12 seconds travelling at 60 and 40 km/h in opposite directions.",
+    "A ball dropped from 10m bounces to 60% of its previous height each time. Find total distance travelled."
+  ],
+  "explanation": "Explain the elegant shortcut for the bird problem, why the geometric series converges for the extra challenge, and the key concepts tested. {level_instruction}"
+}}
+
+IMPORTANT: The JSON above is a TEMPLATE showing the required structure and format. Replace ALL example values with your actual computed answers for the specific problem given above."""
 
     try:
         raw = ""
