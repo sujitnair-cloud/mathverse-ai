@@ -224,24 +224,36 @@ def _rich_fallback(problem: str, sympy_result: dict, difficulty: str) -> str:
 # ── LLM prompt builder ─────────────────────────────────────────────────────────
 def _build_prompt(problem: str, sympy_result: dict, difficulty: str) -> str:
     level_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["intermediate"])
+    answer = sympy_result.get("answer")
+    sympy_failed = not answer or str(answer) in ("See steps", "None", "none")
+
+    final_answer_instruction = ""
+    if sympy_failed:
+        final_answer_instruction = (
+            "IMPORTANT: This is a word/applied problem the symbolic engine could not parse.\n"
+            "Start your ENTIRE response with this line (fill in the actual answers):\n"
+            "**Final Answer:** Part 1: [value]. Part 2: [value]. [etc.]\n\n"
+            "Then explain the full solution step by step.\n\n"
+        )
+
     return f"""You are MathVerse AI, a world-class mathematics tutor.
 
 A student asked: "{problem}"
 
-The symbolic engine already computed:
+{final_answer_instruction}The symbolic engine computed:
 - Topic: {sympy_result.get('topic')}
-- Answer: {sympy_result.get('answer')}
+- Answer: {answer}
 - Steps: {json.dumps(sympy_result.get('steps', []), indent=2)}
 - Formulas used: {sympy_result.get('formulas_used', [])}
 
 Your task:
-1. Write a clear, engaging explanation of the solution.
+1. {'Solve completely and e' if sympy_failed else 'E'}xplain the solution clearly.
 2. {level_instruction}
 3. Highlight the key concept or formula.
 4. Mention 1–2 common mistakes to avoid.
 5. Suggest one similar practice problem.
 
-Format in markdown. Be concise but complete. Do NOT repeat the step-by-step since it's already shown — focus on the WHY and the concept.
+Format in markdown. Be clear and complete.
 """
 
 

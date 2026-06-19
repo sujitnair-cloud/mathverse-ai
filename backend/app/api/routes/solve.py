@@ -158,6 +158,14 @@ async def solve_problem(
     if explanation is None and req.include_explanation:
         explanation = await get_explanation(req.problem, result, explanation_level)
 
+    # For word problems: if SymPy returned "See steps" but the LLM explanation
+    # starts with "**Final Answer:** ...", extract that as the concise answer.
+    if explanation and result.get("answer") in (None, "See steps", ""):
+        import re as _re
+        m = _re.search(r'\*{0,2}Final Answer:?\*{0,2}\s*([^\n]+)', explanation, _re.IGNORECASE)
+        if m:
+            result["answer"] = m.group(1).strip().strip("*").strip()
+
     # Persist to history
     history = SolveHistory(
         session_id=req.session_id if not current_user else str(current_user.id),
