@@ -348,6 +348,7 @@ async def llm_full_solve(problem: str, difficulty: str = "intermediate") -> Opti
     Ask the configured LLM to fully solve a problem that SymPy couldn't handle.
     Returns a dict matching solve_expression's output shape, or None if no LLM is available.
     """
+    import sys
     provider = settings.LLM_PROVIDER.lower()
     has_llm = (
         (provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY)) or
@@ -355,74 +356,51 @@ async def llm_full_solve(problem: str, difficulty: str = "intermediate") -> Opti
         (provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY))
     )
     if not has_llm:
+        print(f"[MathVerse] llm_full_solve: no LLM configured (provider={provider!r})", file=sys.stderr)
         return None
 
     level_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["intermediate"])
 
-    # Detect multi-part structure to guide LLM
+    # Detect multi-part questions
     import re as _re
-    sub_q_matches = _re.findall(
-        r"(?:^|\n)\s*(?:\d+[\.\)]\s|part\s+\d|extra\s+challenge|\(?\w\)\s)",
+    parts = _re.findall(
+        r"(?:^|\n)\s*(?:\d+[\.\)]\s|part\s+\d|extra\s+challenge)",
         problem, _re.IGNORECASE | _re.MULTILINE,
     )
-    multi_part_instruction = (
-        f"This problem has {len(sub_q_matches)} numbered parts/sub-questions. "
-        "Solve EVERY part completely. In 'answer', label each part: 'Part 1: ... Part 2: ... Extra Challenge: ...' "
-        "In 'steps', prefix each step with the part it belongs to, e.g. 'Part 1 — Setup'."
-        if len(sub_q_matches) >= 2 else
-        "Solve the complete problem with full working shown."
+    multi_note = (
+        f"This problem has {len(parts)} parts. Solve ALL of them. "
+        "In 'answer' write: 'Part 1: X. Part 2: Y. Extra Challenge: Z.' "
+        "In 'steps' label each step with its part number."
+        if len(parts) >= 2
+        else "Solve completely, showing all working."
     )
 
-    prompt = f"""You are MathVerse AI — a world-class mathematics tutor that solves any problem:
-primary school arithmetic, IIT JEE Main & Advanced, PhD research, olympiad (IMO/USAMO/Putnam),
-aptitude tests (CAT/GMAT/GRE), word problems, proofs, and competitive exams.
+    prompt = f"""You are MathVerse AI, an expert math tutor. Solve this problem completely.
 
-Problem:
+PROBLEM:
 {problem}
 
-STRICT RULES — follow every one:
-1. {multi_part_instruction}
-2. NEVER skip a sub-question. NEVER say the problem is ambiguous. Solve it.
-3. Ignore typos, missing brackets, informal notation — infer intent and solve.
-4. Show ALL intermediate arithmetic — do not skip from setup to answer.
-5. For word problems: define variables explicitly before using them.
-6. For geometric series / infinite sums: verify |r| < 1 and show the sum formula.
-7. Explanation depth: {level_instruction}
+INSTRUCTIONS:
+- {multi_note}
+- Solve completely regardless of complexity (IIT JEE, olympiad, aptitude, word problems, proofs — all fine).
+- Show ALL intermediate arithmetic steps. Define variables before using them.
+- For infinite series: state the formula S=a/(1-r) and verify |r|<1.
+- Explanation style: {level_instruction}
 
-Return ONLY a valid JSON object — absolutely no text before or after, no markdown code fences:
+OUTPUT FORMAT — respond with ONLY this JSON object, nothing else before or after:
 {{
   "topic": "word_problem",
   "difficulty": "expert",
-  "answer": "Part 1: 4 hours. Part 2: 480 km. Part 3: N crossings. Extra Challenge: X km (full numerical answer). — Replace these placeholders with your actual computed answers.",
+  "answer": "Complete answer for all parts here",
   "steps": [
-    {{"step": 1, "description": "Part 1 — Given data and variable definitions", "expression": "Distance XY = 540 km, Speed_A = 60 km/h, Speed_B = 75 km/h, Bird speed = 120 km/h"}},
-    {{"step": 2, "description": "Part 1 — Relative speed of trains (opposite directions)", "expression": "Relative speed = 60 + 75 = 135 km/h"}},
-    {{"step": 3, "description": "Part 1 — Time to collision", "expression": "t = 540 / 135 = 4 hours"}},
-    {{"step": 4, "description": "Part 2 — Key insight: bird flies for exactly t hours", "expression": "Bird distance = 120 × 4 = 480 km"}},
-    {{"step": 5, "description": "Part 3 — Midpoint crossing analysis", "expression": "Midpoint = 270 km from X. Analyse bird's legs..."}},
-    {{"step": 6, "description": "Extra Challenge — Speed reduction setup", "expression": "s_n = 120 × 0.9^(n-1), geometric series"}},
-    {{"step": 7, "description": "Extra Challenge — Sum the infinite series", "expression": "S = a/(1-r) = ..."}}
+    {{"step": 1, "description": "Step description with part label", "expression": "math working"}},
+    {{"step": 2, "description": "Next step", "expression": "math working"}}
   ],
-  "formulas_used": [
-    "Relative speed (opposite directions) = v_A + v_B",
-    "Time to meet = Total distance / Relative speed",
-    "Bird total distance = Bird speed × Collision time (key insight — ignore individual legs)",
-    "Infinite geometric series: S = a / (1 - r), valid when |r| < 1"
-  ],
-  "common_mistakes": [
-    "Trying to calculate each individual leg of the bird's journey instead of using total time × speed",
-    "Using individual train speed instead of relative speed for collision time",
-    "Applying geometric series without confirming |r| < 1 (here r = 0.9 so it converges)"
-  ],
-  "similar_problems": [
-    "Two cyclists 300 km apart approach each other at 40 and 60 km/h. A fly at 80 km/h shuttles between them. Find total fly distance.",
-    "Trains of 150m and 100m cross each other in 12 seconds travelling at 60 and 40 km/h in opposite directions.",
-    "A ball dropped from 10m bounces to 60% of its previous height each time. Find total distance travelled."
-  ],
-  "explanation": "Explain the elegant shortcut for the bird problem, why the geometric series converges for the extra challenge, and the key concepts tested. {level_instruction}"
-}}
-
-IMPORTANT: The JSON above is a TEMPLATE showing the required structure and format. Replace ALL example values with your actual computed answers for the specific problem given above."""
+  "formulas_used": ["Formula name: formula expression"],
+  "common_mistakes": ["Mistake to avoid"],
+  "similar_problems": ["Similar practice problem"],
+  "explanation": "Explanation of key concepts and method"
+}}"""
 
     try:
         raw = ""
@@ -433,13 +411,19 @@ IMPORTANT: The JSON above is a TEMPLATE showing the required structure and forma
         elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
             raw = await _call_gemini(prompt, max_tokens=2048)
 
+        print(f"[MathVerse] llm_full_solve raw response (first 200 chars): {raw[:200]!r}", file=sys.stderr)
+
         if raw:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
+            # Strip markdown fences if present
+            raw_clean = _re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re.MULTILINE)
+            raw_clean = _re.sub(r"```\s*$", "", raw_clean.strip(), flags=_re.MULTILINE)
+            start = raw_clean.find("{")
+            end = raw_clean.rfind("}") + 1
             if start != -1 and end > start:
-                return json.loads(raw[start:end])
-    except Exception:
-        pass
+                return json.loads(raw_clean[start:end])
+            print(f"[MathVerse] llm_full_solve: no JSON found in response", file=sys.stderr)
+    except Exception as e:
+        print(f"[MathVerse] llm_full_solve error: {e}", file=sys.stderr)
 
     return None
 

@@ -64,3 +64,35 @@ async def root():
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/api/llm-status", tags=["Health"])
+async def llm_status():
+    """Test LLM connectivity. Open this URL in browser to diagnose Gemini issues."""
+    from app.core.config import settings
+    from app.services.llm_service import _key_looks_real, _call_gemini
+    provider = settings.LLM_PROVIDER
+    gemini_key = settings.GEMINI_API_KEY
+    gemini_model = settings.GEMINI_MODEL
+    key_ok = _key_looks_real(gemini_key)
+
+    result = {
+        "llm_provider": provider,
+        "gemini_model": gemini_model,
+        "gemini_key_looks_valid": key_ok,
+        "gemini_key_prefix": gemini_key[:8] + "..." if key_ok else "(not set or placeholder)",
+        "test_call": "not attempted",
+    }
+
+    if provider == "gemini" and key_ok:
+        try:
+            response = await _call_gemini("Say the word: WORKING", max_tokens=10)
+            result["test_call"] = "SUCCESS"
+            result["test_response"] = response[:50]
+        except Exception as e:
+            result["test_call"] = "FAILED"
+            result["test_error"] = str(e)
+    else:
+        result["test_call"] = f"skipped — provider is '{provider}', key_ok={key_ok}"
+
+    return result
