@@ -288,13 +288,15 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     # Try many model+version combos until one works.
     # This handles API key restrictions, model deprecations, and regional differences.
     models_to_try = list(dict.fromkeys([
-        settings.GEMINI_MODEL,        # user-configured (e.g. gemini-1.5-flash)
-        "gemini-2.0-flash-exp",       # newest, widely available on free tier
+        settings.GEMINI_MODEL,
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-exp",
+        "gemini-2.0-flash-lite",
         "gemini-1.5-flash",
         "gemini-1.5-pro",
-        "gemini-1.5-pro-latest",
         "gemini-1.5-flash-latest",
-        "gemini-pro",                 # oldest alias, most compatible
+        "gemini-1.5-pro-latest",
+        "gemini-pro",
         "gemini-1.0-pro",
     ]))
     api_versions = ["v1beta", "v1"]
@@ -302,19 +304,25 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
         last_err: Exception = RuntimeError("No Gemini model responded successfully")
         for model in models_to_try:
             for api_ver in api_versions:
-                url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
-                       f"{model}:generateContent?key={settings.GEMINI_API_KEY}")
-                try:
-                    resp = await client.post(url, json=payload)
-                    if resp.status_code == 404:
+                base_url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
+                            f"{model}:generateContent")
+                # Try header auth first (required for newer AQ. keys), then query-param
+                auth_variants = [
+                    (base_url, {"x-goog-api-key": settings.GEMINI_API_KEY}),
+                    (f"{base_url}?key={settings.GEMINI_API_KEY}", {}),
+                ]
+                for url, extra_headers in auth_variants:
+                    try:
+                        resp = await client.post(url, json=payload, headers=extra_headers)
+                        if resp.status_code in (404, 400):
+                            break  # wrong model/version, try next
+                        resp.raise_for_status()
+                        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        print(f"[MathVerse] Gemini success: {model} ({api_ver})", file=sys.stderr)
+                        return text
+                    except Exception as e:
+                        last_err = e
                         continue
-                    resp.raise_for_status()
-                    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    print(f"[MathVerse] Gemini success: {model} ({api_ver})", file=sys.stderr)
-                    return text
-                except Exception as e:
-                    last_err = e
-                    continue
         raise last_err
 
 

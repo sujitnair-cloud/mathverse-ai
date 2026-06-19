@@ -68,9 +68,11 @@ async def health():
 
 @app.get("/api/llm-status", tags=["Health"])
 async def llm_status():
-    """Test LLM connectivity. Open this URL in browser to diagnose Gemini issues."""
+    """Test LLM connectivity and list available Gemini models for this API key."""
+    import httpx
     from app.core.config import settings
-    from app.services.llm_service import _key_looks_real, _call_gemini
+    from app.services.llm_service import _key_looks_real
+
     provider = settings.LLM_PROVIDER
     gemini_key = settings.GEMINI_API_KEY
     gemini_model = settings.GEMINI_MODEL
@@ -78,21 +80,60 @@ async def llm_status():
 
     result = {
         "llm_provider": provider,
-        "gemini_model": gemini_model,
+        "gemini_model_configured": gemini_model,
         "gemini_key_looks_valid": key_ok,
-        "gemini_key_prefix": gemini_key[:8] + "..." if key_ok else "(not set or placeholder)",
+        "gemini_key_prefix": gemini_key[:10] + "..." if key_ok else "(not set)",
+        "available_models": [],
         "test_call": "not attempted",
     }
 
-    if provider == "gemini" and key_ok:
-        try:
-            response = await _call_gemini("Say the word: WORKING", max_tokens=10)
-            result["test_call"] = "SUCCESS"
-            result["test_response"] = response[:50]
-        except Exception as e:
-            result["test_call"] = "FAILED"
-            result["test_error"] = str(e)
-    else:
-        result["test_call"] = f"skipped — provider is '{provider}', key_ok={key_ok}"
+    if not (provider == "gemini" and key_ok):
+        result["test_call"] = f"skipped — LLM_PROVIDER='{provider}', key valid={key_ok}"
+        return result
 
+    async with httpx.AsyncClient(timeout=20) as client:
+        # 1. List all models this key has access to
+        for api_ver in ["v1beta", "v1"]:
+            try:
+                r = await client.get(
+                    f"https://generativelanguage.googleapis.com/{api_ver}/models",
+                    headers={"x-goog-api-key": gemini_key},
+                )
+                if r.status_code == 200:
+                    models = r.json().get("models", [])
+                    result["available_models"] = [m["name"].replace("models/", "") for m in models]
+                    result["models_api_version"] = api_ver
+                    break
+                else:
+                    result[f"models_list_{api_ver}"] = f"HTTP {r.status_code}"
+            except Exception as e:
+                result[f"models_list_{api_ver}_error"] = str(e)
+
+        # 2. Try a test generation with each available model until one works
+        models_to_try = result.get("available_models", []) or [
+            "gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-2.0-flash-lite",
+            "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro", "gemini-1.0-pro",
+        ]
+        payload = {
+            "contents": [{"parts": [{"text": "Reply with one word: WORKING"}]}],
+            "generationConfig": {"maxOutputTokens": 10},
+        }
+        for model in models_to_try[:8]:
+            for api_ver in ["v1beta", "v1"]:
+                url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model}:generateContent"
+                try:
+                    r = await client.post(url, json=payload, headers={"x-goog-api-key": gemini_key})
+                    if r.status_code == 404:
+                        continue
+                    r.raise_for_status()
+                    text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    result["test_call"] = "SUCCESS"
+                    result["working_model"] = model
+                    result["working_api_version"] = api_ver
+                    result["test_response"] = text.strip()
+                    return result
+                except Exception as e:
+                    result[f"tried_{model}_{api_ver}"] = str(e)[:80]
+
+        result["test_call"] = "FAILED — no model worked. See tried_* fields above."
     return result
