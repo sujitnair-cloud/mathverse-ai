@@ -345,12 +345,9 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
 
 
 def _repair_json_backslashes(s: str) -> str:
-    """
-    Fix invalid JSON escape sequences that LLMs produce when writing LaTeX.
-    JSON only allows: \" \\ \/ \b \f \n \r \t \uXXXX
-    LaTeX sequences like \c \s \l \p \m \e etc. are invalid and break json.loads.
-    We double-escape them so \\cdot → \\\\cdot → decoded as \\cdot (literal backslash).
-    """
+    # Fix invalid JSON escape sequences from LLM LaTeX output.
+    # Valid JSON escapes: \" \\ \/ \b \f \n \r \t and \\u+4hex.
+    # LaTeX like \cdot \sqrt \leq breaks json.loads — double-escape them.
     import re as _re
     VALID_JSON_ESCAPES = set('"\\bfnrtu/')
     result: list = []
