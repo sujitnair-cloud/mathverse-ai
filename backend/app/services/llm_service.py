@@ -280,24 +280,41 @@ async def _call_openai(prompt: str, max_tokens: int = 1024) -> str:
 
 
 async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
+    import sys
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
-    # Try the configured model first, then fall back to flash (always available on free tier)
-    models_to_try = list(dict.fromkeys([settings.GEMINI_MODEL, "gemini-1.5-flash", "gemini-1.5-flash-8b"]))
+    # Try many model+version combos until one works.
+    # This handles API key restrictions, model deprecations, and regional differences.
+    models_to_try = list(dict.fromkeys([
+        settings.GEMINI_MODEL,        # user-configured (e.g. gemini-1.5-flash)
+        "gemini-2.0-flash-exp",       # newest, widely available on free tier
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-1.5-pro-latest",
+        "gemini-1.5-flash-latest",
+        "gemini-pro",                 # oldest alias, most compatible
+        "gemini-1.0-pro",
+    ]))
+    api_versions = ["v1beta", "v1"]
     async with httpx.AsyncClient(timeout=45) as client:
-        last_err: Exception = RuntimeError("No Gemini model available")
+        last_err: Exception = RuntimeError("No Gemini model responded successfully")
         for model in models_to_try:
-            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                   f"{model}:generateContent?key={settings.GEMINI_API_KEY}")
-            try:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-                return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            except Exception as e:
-                last_err = e
-                continue
+            for api_ver in api_versions:
+                url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
+                       f"{model}:generateContent?key={settings.GEMINI_API_KEY}")
+                try:
+                    resp = await client.post(url, json=payload)
+                    if resp.status_code == 404:
+                        continue
+                    resp.raise_for_status()
+                    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    print(f"[MathVerse] Gemini success: {model} ({api_ver})", file=sys.stderr)
+                    return text
+                except Exception as e:
+                    last_err = e
+                    continue
         raise last_err
 
 
