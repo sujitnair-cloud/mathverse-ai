@@ -151,32 +151,5 @@ async def llm_status():
                     except Exception as e:
                         result[f"rest_{model}_{label}_err"] = str(e)[:200]
 
-    # ── Phase 2: google-generativeai SDK ──────────────────────────────────────
-    def _sdk_test() -> str:
-        import google.generativeai as genai  # type: ignore
-        genai.configure(api_key=gemini_key)
-        for m in ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
-            try:
-                model_obj = genai.GenerativeModel(m)
-                resp = model_obj.generate_content(
-                    "Reply with one word: WORKING",
-                    generation_config={"max_output_tokens": 10},
-                )
-                return f"SDK success with {m}: {resp.text.strip()}"
-            except Exception as e:
-                result[f"sdk_{m}"] = str(e)[:200]
-        return "SDK: all models failed"
-
-    loop = asyncio.get_running_loop()
-    try:
-        sdk_result = await loop.run_in_executor(None, _sdk_test)
-        if sdk_result.startswith("SDK success"):
-            result["test_call"] = "SUCCESS (SDK)"
-            result["sdk_result"] = sdk_result
-            return result
-        result["sdk_result"] = sdk_result
-    except Exception as e:
-        result["sdk_error"] = str(e)[:300]
-
-    result["test_call"] = "FAILED — check models_list_* and rest_*/sdk_* fields for exact errors"
+    result["test_call"] = "FAILED — check models_list_* and rest_* fields for exact errors"
     return result

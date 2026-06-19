@@ -279,46 +279,6 @@ async def _call_openai(prompt: str, max_tokens: int = 1024) -> str:
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _call_gemini_sdk(prompt: str, max_tokens: int = 1024) -> str:
-    """Use the google-generativeai Python SDK — handles AQ. key format natively."""
-    import asyncio
-    import sys
-
-    def _run_sync() -> str:
-        import google.generativeai as genai  # type: ignore
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        models_to_try = [
-            settings.GEMINI_MODEL,
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-        ]
-        last_exc: Exception = RuntimeError("SDK: no model worked")
-        for m in models_to_try:
-            try:
-                model = genai.GenerativeModel(m)
-                resp = model.generate_content(
-                    prompt,
-                    generation_config={"max_output_tokens": max_tokens},
-                )
-                # resp.text raises if only thought parts exist; use parts directly
-                try:
-                    text = resp.text
-                except Exception:
-                    parts = resp.candidates[0].content.parts
-                    text = next((p.text for p in parts if not getattr(p, "thought", False)), parts[-1].text)
-                print(f"[MathVerse] Gemini SDK success: {m}", file=sys.stderr)
-                return text
-            except Exception as e:
-                last_exc = e
-                print(f"[MathVerse] Gemini SDK {m} failed: {e}", file=sys.stderr)
-                continue
-        raise last_exc
-
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _run_sync)
-
 
 async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     import sys
@@ -381,15 +341,7 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
                         last_err = e
                         continue
 
-    # Phase 2: fall back to the Python SDK (handles AQ. key format natively)
-    print("[MathVerse] REST failed; trying google-generativeai SDK", file=sys.stderr)
-    try:
-        return await _call_gemini_sdk(prompt, max_tokens)
-    except Exception as sdk_err:
-        print(f"[MathVerse] SDK also failed: {sdk_err}", file=sys.stderr)
-        raise RuntimeError(
-            f"Gemini REST failed ({last_err}); SDK also failed ({sdk_err})"
-        ) from sdk_err
+    raise last_err
 
 
 def _repair_json_backslashes(s: str) -> str:
