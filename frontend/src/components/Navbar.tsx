@@ -94,6 +94,18 @@ export default function Navbar() {
             </Link>
 
             {/* User avatar or sign-in */}
+            <Link
+              to="/pricing"
+              className={clsx(
+                'hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-all',
+                location.pathname === '/pricing'
+                  ? 'border-indigo-500/50 bg-indigo-500/15 text-indigo-300'
+                  : 'border-slate-600 text-slate-400 hover:border-indigo-500/40 hover:text-indigo-300'
+              )}
+            >
+              ⚡ Upgrade
+            </Link>
+
             {user ? (
               <div className="relative" ref={userMenuRef}>
                 <button

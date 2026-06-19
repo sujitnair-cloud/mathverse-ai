@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     # Google OAuth — get from console.cloud.google.com
     GOOGLE_CLIENT_ID: str = ""
 
+    # Stripe — get from dashboard.stripe.com
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_STUDENT_PRICE_ID: str = ""   # $4.99/mo price ID from Stripe dashboard
+    STRIPE_PRO_PRICE_ID: str = ""       # $9.99/mo price ID from Stripe dashboard
+
     @property
     def origins(self) -> List[str]:
         base = [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]

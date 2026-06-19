@@ -12,6 +12,19 @@ class User(Base):
     name = Column(String(200))
     avatar_url = Column(Text)
     is_active = Column(Boolean, default=True)
+
+    # Stripe subscription
+    stripe_customer_id = Column(String(128), unique=True, index=True)
+    stripe_subscription_id = Column(String(128))
+    subscription_plan = Column(String(20), default="free")   # free | student | pro | school
+    subscription_status = Column(String(20), default="active")  # active | canceled | past_due
+    subscription_expires_at = Column(DateTime(timezone=True))
+
+    # Usage tracking
+    daily_solves = Column(Integer, default=0)
+    daily_solves_reset_at = Column(DateTime(timezone=True))
+    total_solves = Column(Integer, default=0)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_login = Column(DateTime(timezone=True), onupdate=func.now())
 

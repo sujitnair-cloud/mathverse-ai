@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+# Disallow private/API routes
+Disallow: /api/
+Disallow: /admin
+
+Sitemap: https://mathverseai.com/sitemap.xml

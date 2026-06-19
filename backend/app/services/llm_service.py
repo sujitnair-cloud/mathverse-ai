@@ -173,84 +173,50 @@ def _get_topic_info(topic: str) -> dict:
 
 # ── Rich fallback explanation (no LLM needed) ──────────────────────────────────
 def _rich_fallback(problem: str, sympy_result: dict, difficulty: str) -> str:
+    """
+    Generate the AI Explanation block.
+    The UI already shows: answer, step-by-step, formulas, common mistakes, similar problems.
+    This block focuses on the WHY — concept, rules, and a pro tip.
+    """
     topic = sympy_result.get("topic", "algebra_general")
-    answer = sympy_result.get("answer", "See steps above")
-    steps = sympy_result.get("steps", [])
-    formulas = sympy_result.get("formulas_used", [])
-    mistakes = sympy_result.get("common_mistakes", [])
-    similar = sympy_result.get("similar_problems", [])
     info = _get_topic_info(topic)
-
     topic_label = topic.replace("_", " ").title()
 
     # Difficulty-appropriate opener
     openers = {
-        "kids":         f"Great question! 🎉 Let's figure out **{problem}** together, step by step!",
-        "basic":        f"Let's solve **{problem}** clearly.",
-        "intermediate": f"Here's a full walkthrough of **{problem}**.",
-        "advanced":     f"**{problem}** — rigorous solution below.",
-        "expert":       f"**{problem}** — detailed analysis with mathematical justification.",
+        "kids":         f"Great question! 🎉 Here's what you need to know to solve **{problem}**!",
+        "basic":        f"Here's the concept behind **{problem}**.",
+        "intermediate": f"Here's the mathematical reasoning behind **{problem}**.",
+        "advanced":     f"Mathematical analysis of **{problem}**.",
+        "expert":       f"Rigorous treatment of **{problem}**.",
     }
     opener = openers.get(difficulty, openers["intermediate"])
 
-    # Build step-by-step block
-    steps_md = ""
-    if steps:
-        steps_md = "\n### Step-by-Step Solution\n"
-        for s in steps:
-            expr = f"`{s['expression']}`" if s.get("expression") else ""
-            steps_md += f"\n**Step {s['step']}:** {s['description']}"
-            if expr:
-                steps_md += f"  \n> {expr}"
-        steps_md += "\n"
+    # Key concept
+    concept_md = f"\n### 📐 Key Concept — {topic_label}\n\n{info['intro']}\n"
 
-    # Answer block
-    answer_md = f"\n### ✅ Answer\n\n```\n{answer}\n```\n"
+    # Rules as numbered list for clarity
+    rules_list = "\n".join(f"{i+1}. {r}" for i, r in enumerate(info["key_rules"]))
+    rules_md = f"\n### 📏 Essential Rules\n\n{rules_list}\n"
 
-    # Concept block
-    concept_md = f"\n### 📐 Key Concept: {topic_label}\n\n{info['intro']}\n"
+    # Pro tip as callout
+    tip_md = f"\n### 💡 Pro Tip\n\n> {info['tip']}\n"
 
-    # Rules block
-    rules_md = "\n**Essential Rules:**\n" + "\n".join(f"- {r}" for r in info["key_rules"]) + "\n"
-
-    # Formulas used
-    formulas_md = ""
-    if formulas:
-        formulas_md = "\n### 📋 Formulas Applied\n" + "\n".join(f"- `{f}`" for f in formulas) + "\n"
-
-    # Common mistakes
-    mistakes_md = ""
-    if mistakes:
-        mistakes_md = "\n### ⚠️ Common Mistakes to Avoid\n" + "\n".join(f"- {m}" for m in mistakes) + "\n"
-
-    # Pro tip
-    tip_md = f"\n> **💡 Tip:** {info['tip']}\n"
-
-    # Difficulty note
+    # Difficulty-tailored note
     level_notes = {
-        "kids":         "\n*Remember: maths is like a puzzle — every piece fits perfectly! 🧩*",
-        "basic":        "\n*Practice this type with 2–3 more problems to build confidence.*",
-        "intermediate": "\n*Next step: try the alternate method shown in the steps.*",
-        "advanced":     "\n*For deeper understanding, explore the proof of the core theorem used here.*",
-        "expert":       "\n*Consider the edge cases: what happens at singularities or boundary conditions?*",
+        "kids":         "\n---\n*Maths is like a puzzle — every piece fits perfectly! Keep practising! 🧩*",
+        "basic":        "\n---\n*Try 2–3 similar problems to build confidence with this method.*",
+        "intermediate": "\n---\n*Challenge yourself: can you solve this using an alternative method?*",
+        "advanced":     "\n---\n*Explore the proof of the core theorem to deepen your understanding.*",
+        "expert":       "\n---\n*Consider edge cases: singularities, boundary conditions, and degenerate forms.*",
     }
     level_note = level_notes.get(difficulty, "")
 
-    # Similar problems
-    similar_md = ""
-    if similar:
-        similar_md = "\n### 🔁 Practice Problems\n" + "\n".join(f"- {p}" for p in similar) + "\n"
-
     return (
         f"{opener}\n"
-        f"{answer_md}"
-        f"{steps_md}"
         f"{concept_md}"
         f"{rules_md}"
-        f"{formulas_md}"
-        f"{mistakes_md}"
         f"{tip_md}"
-        f"{similar_md}"
         f"{level_note}"
     )
 

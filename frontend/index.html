@@ -2,17 +2,90 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- ── Primary SEO ──────────────────────────────────────────────── -->
+    <title>MathVerse AI — AI Math Solver, Formulas & Learning Platform</title>
+    <meta name="description" content="Solve any math problem instantly with step-by-step AI explanations. Covers algebra, calculus, geometry, statistics, trigonometry and more. Free math learning platform." />
+    <meta name="keywords" content="math solver, AI math, calculus solver, algebra calculator, step by step math, formula library, math quiz, learn mathematics" />
+    <meta name="author" content="MathVerse AI" />
+    <link rel="canonical" href="https://mathverseai.com/" />
+
+    <!-- ── Open Graph (Facebook, WhatsApp, LinkedIn) ────────────────── -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://mathverseai.com/" />
+    <meta property="og:title" content="MathVerse AI — Solve Any Math Problem Instantly" />
+    <meta property="og:description" content="AI-powered math solver with step-by-step solutions, formula library, interactive graphing, and adaptive quizzes. From arithmetic to advanced calculus." />
+    <meta property="og:image" content="https://mathverseai.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="MathVerse AI" />
+
+    <!-- ── Twitter Card ──────────────────────────────────────────────── -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="MathVerse AI — Solve Any Math Problem Instantly" />
+    <meta name="twitter:description" content="AI-powered math solver with step-by-step solutions. Free for students." />
+    <meta name="twitter:image" content="https://mathverseai.com/og-image.png" />
+
+    <!-- ── PWA / Mobile ──────────────────────────────────────────────── -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#6366f1" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="MathVerse AI" />
+    <link rel="apple-touch-icon" href="/icon-192.svg" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- ── Favicon ───────────────────────────────────────────────────── -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="MathVerse AI — Your complete mathematics learning and solving platform" />
-    <title>MathVerse AI</title>
+
+    <!-- ── Fonts ─────────────────────────────────────────────────────── -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+    <!-- ── KaTeX ─────────────────────────────────────────────────────── -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
+
+    <!-- ── Google Analytics 4 ───────────────────────────────────────── -->
+    <!-- Replace G-XXXXXXXXXX with your real GA4 measurement ID from analytics.google.com -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-XXXXXXXXXX', { page_path: window.location.pathname });
+    </script>
+
+    <!-- ── Structured Data (Google rich results) ────────────────────── -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "MathVerse AI",
+      "url": "https://mathverseai.com",
+      "description": "AI-powered mathematics learning platform with step-by-step solver, formula library, graphing calculator, and adaptive quizzes.",
+      "applicationCategory": "EducationalApplication",
+      "operatingSystem": "Web, iOS, Android",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    }
+    </script>
   </head>
   <body class="bg-slate-900 text-slate-100 antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- ── Service Worker Registration ──────────────────────────────── -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
+    </script>
   </body>
 </html>

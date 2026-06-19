@@ -3,9 +3,75 @@ import { useSearchParams } from 'react-router-dom'
 import { useSolver } from '../hooks/useSolver'
 import StepDisplay from '../components/StepDisplay'
 import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
 import { Calculator, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronUp, BookOpen, AlertTriangle, Lightbulb } from 'lucide-react'
 import type { Difficulty } from '../types'
 import clsx from 'clsx'
+
+// ── Custom markdown renderer ─────────────────────────────────────────────────
+const mdComponents: Components = {
+  h1: ({ children }) => (
+    <h1 className="text-xl font-bold text-white mt-6 mb-3 pb-2 border-b border-slate-700">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="text-lg font-bold text-white mt-5 mb-2">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-sm font-bold text-indigo-300 uppercase tracking-wider mt-6 mb-3 flex items-center gap-2">
+      <span className="w-1 h-4 bg-indigo-500 rounded-full inline-block" />
+      {children}
+    </h3>
+  ),
+  p: ({ children }) => (
+    <p className="text-slate-300 text-sm leading-7 mb-3">{children}</p>
+  ),
+  ol: ({ children }) => (
+    <ol className="space-y-2 mb-4 pl-1">{children}</ol>
+  ),
+  ul: ({ children }) => (
+    <ul className="space-y-2 mb-4 pl-1">{children}</ul>
+  ),
+  li: ({ children, ...props }) => {
+    const ordered = (props as { ordered?: boolean }).ordered
+    return (
+      <li className="flex items-start gap-3 text-sm text-slate-300">
+        {ordered
+          ? null
+          : <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />}
+        <span className="leading-6">{children}</span>
+      </li>
+    )
+  },
+  strong: ({ children }) => (
+    <strong className="font-semibold text-white">{children}</strong>
+  ),
+  em: ({ children }) => (
+    <em className="not-italic text-slate-400 text-xs">{children}</em>
+  ),
+  code: ({ children, className }) => {
+    const isBlock = Boolean(className)
+    if (isBlock) {
+      return (
+        <code className="block bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 my-3 font-mono text-sm text-emerald-300 overflow-x-auto leading-6 whitespace-pre-wrap">
+          {children}
+        </code>
+      )
+    }
+    return (
+      <code className="bg-slate-700/70 text-indigo-200 px-1.5 py-0.5 rounded font-mono text-xs">
+        {children}
+      </code>
+    )
+  },
+  pre: ({ children }) => <>{children}</>,
+  blockquote: ({ children }) => (
+    <div className="flex gap-3 bg-amber-500/8 border border-amber-500/25 rounded-xl px-4 py-3 my-4">
+      <span className="text-amber-400 text-lg leading-none flex-shrink-0 mt-0.5">💡</span>
+      <div className="text-sm text-amber-200 leading-6 [&>p]:mb-0 [&>p]:text-amber-200">{children}</div>
+    </div>
+  ),
+  hr: () => <hr className="border-slate-700/60 my-5" />,
+}
 
 const DIFFICULTY_OPTIONS: { value: Difficulty; label: string; desc: string }[] = [
   { value: 'kids', label: '🧒 Kids', desc: 'Very simple words' },
@@ -193,20 +259,31 @@ export default function Solver() {
 
           {/* AI Explanation */}
           {result.explanation && (
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-5">
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-2xl overflow-hidden">
+              {/* Header */}
               <button
                 onClick={() => setShowExplanation(s => !s)}
-                className="flex items-center justify-between w-full text-left mb-3"
+                className="flex items-center justify-between w-full text-left px-5 py-4 hover:bg-slate-700/30 transition-colors"
               >
-                <h3 className="font-semibold text-white flex items-center gap-2">
-                  <Lightbulb size={16} className="text-amber-400" />
-                  AI Explanation
-                </h3>
-                {showExplanation ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-amber-500/20 flex items-center justify-center">
+                    <Lightbulb size={14} className="text-amber-400" />
+                  </div>
+                  <span className="font-semibold text-white text-sm">AI Explanation</span>
+                  <span className="text-xs bg-amber-500/15 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/20">
+                    Concept + Rules
+                  </span>
+                </div>
+                {showExplanation
+                  ? <ChevronUp size={15} className="text-slate-500" />
+                  : <ChevronDown size={15} className="text-slate-500" />}
               </button>
+
               {showExplanation && (
-                <div className="prose prose-invert prose-sm max-w-none text-slate-300">
-                  <ReactMarkdown>{result.explanation}</ReactMarkdown>
+                <div className="border-t border-slate-700/50 px-5 pb-5 pt-1">
+                  <ReactMarkdown components={mdComponents}>
+                    {result.explanation}
+                  </ReactMarkdown>
                 </div>
               )}
             </div>

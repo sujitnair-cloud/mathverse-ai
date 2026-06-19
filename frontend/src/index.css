@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Safe area (iPhone notch / home indicator) ─────────────────────── */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+.pb-safe { padding-bottom: calc(0.5rem + var(--sab)); }
+
+/* ── Prevent text size adjustment on mobile ────────────────────────── */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* ── Smooth tap highlight removal ─────────────────────────────────── */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* ── Touch-friendly minimum tap targets ────────────────────────────── */
+button, a, [role="button"] { min-height: 44px; min-width: 44px; }
+button.icon-btn, a.icon-btn { min-height: 36px; min-width: 36px; }
+
 @layer base {
   * {
     box-sizing: border-box;

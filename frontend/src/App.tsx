@@ -14,6 +14,7 @@ import Profile from './pages/Profile'
 import Admin from './pages/Admin'
 import Settings from './pages/Settings'
 import About from './pages/About'
+import Pricing from './pages/Pricing'
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 
@@ -36,6 +37,7 @@ export default function App() {
               <Route path="/admin" element={<Admin />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/about" element={<About />} />
+              <Route path="/pricing" element={<Pricing />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
