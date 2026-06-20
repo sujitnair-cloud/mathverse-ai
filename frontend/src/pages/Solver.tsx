@@ -267,10 +267,10 @@ export default function Solver() {
               <CheckCircle size={18} className="text-emerald-400" />
               <span className="text-emerald-300 font-medium">Problem Solved</span>
               <span className="text-xs bg-indigo-500/15 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-500/20">
-                {result.topic.replace(/_/g, ' ')}
+                {(result.topic || 'general').replace(/_/g, ' ')}
               </span>
               <span className="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
-                {result.difficulty}
+                {result.difficulty || 'intermediate'}
               </span>
             </div>
 
