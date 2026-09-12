@@ -48,7 +48,7 @@ class QuotaExhaustedError(Exception):
 
 # ── Difficulty-level instructions ──────────────────────────────────────────────
 DIFFICULTY_INSTRUCTIONS = {
-    "kids":         "Explain like I am 8 years old. Use very simple words, fun analogies, and emojis. Be very encouraging.",
+    "kids":         "Teach a child in grades 1–5. Use one method, everyday words, and short sentences. Use at most one concrete model when helpful. Keep the explanation under 90 words, with at most three short steps for a simple problem. Preserve necessary reasoning and all requested parts; never sacrifice correctness to meet a length target. Avoid extra methods, jargon, decorative emojis, and unrelated practice questions.",
     "basic":        "Explain simply and clearly. Use everyday examples. Avoid jargon.",
     "intermediate": "Explain clearly with proper math terminology. Show the reasoning at each step.",
     "advanced":     "Explain rigorously. Include the mathematical justification for each step.",
@@ -209,6 +209,18 @@ def _rich_fallback(problem: str, sympy_result: dict, difficulty: str) -> str:
     The UI already shows: answer, step-by-step, formulas, common mistakes, similar problems.
     This block focuses on the WHY — concept, rules, and a pro tip.
     """
+    if difficulty == "kids":
+        # Do not substitute an adult topic lecture when AI is unavailable.
+        # Keep the engine's full working in the separate steps panel.
+        answer = sympy_result.get("answer")
+        if not answer or str(answer) in ("See steps", "None", "none"):
+            return "I couldn't work this out reliably yet. Let's try one small part at a time."
+        return (
+            f"**Answer:** {answer}\n\n"
+            "A simple explanation is unavailable right now. "
+            "The working is shown in the steps section."
+        )
+
     topic = sympy_result.get("topic", "algebra_general")
     info = _get_topic_info(topic)
     topic_label = topic.replace("_", " ").title()
@@ -257,6 +269,23 @@ def _build_prompt(problem: str, sympy_result: dict, difficulty: str) -> str:
     level_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["intermediate"])
     answer = sympy_result.get("answer")
     sympy_failed = not answer or str(answer) in ("See steps", "None", "none")
+
+    if difficulty == "kids":
+        return f"""You are MathVerse AI, a careful primary-school maths tutor.
+Problem: {problem}
+Computed answer: {answer}
+Working: {json.dumps(sympy_result.get('steps', []))}
+
+{level_instruction}
+Use one short answer line, then explain why the method works in a small paragraph
+or up to three short steps. Do not add a rules list, pro tip, common-mistakes
+section, or practice exercise. Use a familiar model only if it fits this problem.
+For a problem beyond primary school, say so gently and explain only what you can
+accurately; do not invent a child-friendly rule that is mathematically false.
+If the computed answer is missing or unreliable, solve and check it before stating
+it. If you cannot, say that clearly. Never present 'See steps' as an answer.
+Use markdown. Start a newly solved answer with **Final Answer:**.
+"""
 
     final_answer_instruction = ""
     if sympy_failed:
@@ -520,6 +549,14 @@ async def llm_full_solve(problem: str, difficulty: str = "intermediate") -> Opti
         else "Solve completely, showing all working."
     )
 
+    working_instruction = (
+        "Show one method with short, child-friendly steps. Combine routine arithmetic "
+        "where clear, but preserve all necessary reasoning and requested parts. "
+        "Keep common_mistakes and similar_problems empty for this first explanation."
+        if difficulty == "kids"
+        else "Show ALL intermediate arithmetic steps. Define variables before using them."
+    )
+
     prompt = f"""You are MathVerse AI, an expert math tutor. Solve this problem completely.
 
 PROBLEM:
@@ -528,7 +565,7 @@ PROBLEM:
 INSTRUCTIONS:
 - {multi_note}
 - Solve completely regardless of complexity (IIT JEE, olympiad, aptitude, word problems — all fine).
-- Show ALL intermediate arithmetic steps. Define variables before using them.
+- {working_instruction}
 - For infinite series: use S = a/(1-r) and verify |r| < 1.
 - Explanation style: {level_instruction}
 
@@ -549,6 +586,19 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
   "similar_problems": ["Two cars 400 km apart approach at 50 and 70 km/h. Find collision time."],
   "explanation": "Brief explanation of the key concept used"
 }}"""
+
+    if difficulty == "kids":
+        # Use a neutral schema instead of the advanced worked-example scaffold.
+        prompt = prompt[:prompt.index("OUTPUT FORMAT")]
+        prompt += "OUTPUT FORMAT: Return only valid JSON using this structure. Replace placeholders with this problem's solution.\n"
+        prompt += json.dumps({
+            "topic": "actual topic",
+            "difficulty": "actual problem difficulty",
+            "answer": "short complete answer",
+            "steps": [{"step": 1, "description": "short explanation", "expression": "plain arithmetic"}],
+            "formulas_used": [], "common_mistakes": [], "similar_problems": [],
+            "explanation": "Briefly explain why the one method works; do not repeat all the steps.",
+        })
 
     cache_key = _ck(problem, difficulty)
     cached = _cache_get(_SOLVE_CACHE, cache_key)
