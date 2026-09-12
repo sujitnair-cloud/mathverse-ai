@@ -10,6 +10,8 @@ const api = axios.create({
   timeout: 120000, // 2 minutes — LLM calls for complex problems can take 30-60s
 })
 
+export default api
+
 // Attach JWT token from localStorage on every request
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('mathverse_token')
