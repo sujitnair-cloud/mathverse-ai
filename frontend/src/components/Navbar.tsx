@@ -3,13 +3,14 @@ import { useTheme } from '../hooks/useTheme'
 import { useAuth } from '../context/AuthContext'
 import {
   Sun, Moon, Calculator, BookOpen, Library, BarChart2,
-  Trophy, History, Settings, Menu, X, LogOut, User
+  Trophy, History, Settings, Menu, X, LogOut, User, Map
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import clsx from 'clsx'
 
 const NAV_ITEMS = [
   { to: '/solver', label: 'AI Solver', icon: Calculator },
+  { to: '/learn', label: 'Learning Path', icon: Map },
   { to: '/formulas', label: 'Formulas', icon: Library },
   { to: '/topics', label: 'Topics', icon: BookOpen },
   { to: '/graph', label: 'Graphing', icon: BarChart2 },

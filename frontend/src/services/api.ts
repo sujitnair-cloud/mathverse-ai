@@ -113,6 +113,39 @@ export const submitQuiz = async (
   return data
 }
 
+// ── Learning journey ───────────────────────────────────────────────────────────
+export const getSkillMap = async () => {
+  const { data } = await api.get('/learning/skill-map', { params: { session_id: getSessionId() } })
+  return data
+}
+
+export const getRecommendation = async () => {
+  const { data } = await api.get('/learning/recommendation', { params: { session_id: getSessionId() } })
+  return data
+}
+
+export const getLesson = async (slug: string) => {
+  const { data } = await api.get(`/learning/lesson/${slug}`)
+  return data
+}
+
+export const nextPracticeQuestion = async (topic: string, stage: string) => {
+  const { data } = await api.post('/learning/practice/next', { session_id: getSessionId(), topic, stage })
+  return data
+}
+
+export const submitPracticeAnswer = async (questionId: string, selected: string, hintsUsed: number) => {
+  const { data } = await api.post('/learning/practice/answer', {
+    session_id: getSessionId(), question_id: questionId, selected, hints_used: hintsUsed,
+  })
+  return data
+}
+
+export const getLearningProgress = async () => {
+  const { data } = await api.get('/learning/progress', { params: { session_id: getSessionId() } })
+  return data
+}
+
 // ── History ──────────────────────────────────────────────────────────────────
 export const getHistory = async (limit = 50): Promise<{ history: HistoryItem[] }> => {
   const { data } = await api.get('/history', { params: { session_id: getSessionId(), limit } })
