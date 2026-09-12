@@ -95,20 +95,13 @@ export default function Solver() {
   const [searchParams] = useSearchParams()
   const [input, setInput] = useState(searchParams.get('q') || '')
   const [difficulty, setDifficulty] = useState<Difficulty>('intermediate')
-  const [autoDetected, setAutoDetected] = useState(false)
   const [showSteps, setShowSteps] = useState(true)
   const [showExplanation, setShowExplanation] = useState(true)
   const { result, loading, error, limitHit, solve } = useSolver()
   const { user } = useAuth()
   const navigate = useNavigate()
 
-  // Auto-highlight the difficulty level the backend detected
-  useEffect(() => {
-    if (result?.difficulty && result.difficulty !== difficulty) {
-      setDifficulty(result.difficulty as Difficulty)
-      setAutoDetected(true)
-    }
-  }, [result]) // eslint-disable-line
+  // Problem difficulty must not overwrite the learner's explanation preference.
 
   useEffect(() => {
     const q = searchParams.get('q')
@@ -120,7 +113,6 @@ export default function Solver() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    setAutoDetected(false)
     solve(input, difficulty)
   }
 
@@ -148,12 +140,13 @@ export default function Solver() {
 
           {/* Difficulty selector */}
           <div className="flex flex-wrap items-center gap-2 mb-4">
-            <span className="text-slate-500 text-xs">Level:</span>
+            <span className="text-slate-500 text-xs">Explain for:</span>
             {DIFFICULTY_OPTIONS.map(opt => (
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => { setDifficulty(opt.value); setAutoDetected(false) }}
+                onClick={() => setDifficulty(opt.value)}
+                aria-pressed={difficulty === opt.value}
                 className={clsx(
                   'px-3 py-1 rounded-lg text-xs font-medium transition-all',
                   difficulty === opt.value
@@ -164,11 +157,6 @@ export default function Solver() {
                 {opt.label}
               </button>
             ))}
-            {autoDetected && (
-              <span className="text-xs bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full animate-pulse">
-                Auto-detected
-              </span>
-            )}
           </div>
 
           <div className="flex justify-between items-center">
