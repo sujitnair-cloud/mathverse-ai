@@ -99,16 +99,12 @@ export const generateQuiz = async (topic: string, difficulty: string, count = 5)
 }
 
 export const submitQuiz = async (
-  topic: string,
-  difficulty: string,
-  questions: object[],
+  quizId: string,
   userAnswers: string[],
 ) => {
   const { data } = await api.post('/quiz/submit', {
     session_id: getSessionId(),
-    topic,
-    difficulty,
-    questions,
+    quiz_id: quizId,
     user_answers: userAnswers,
   })
   return data
