@@ -20,4 +20,11 @@ scipy==1.13.0
 python-jose[cryptography]==3.3.0
 google-auth==2.29.0
 google-auth-httplib2==0.2.0
+# google.auth.transport.requests (used in auth.py to verify Google ID
+# tokens) imports `requests` directly. This used to be pulled in
+# transitively by the stripe package; removing stripe for the Cashfree
+# migration silently took it down too, and it's needed at module import
+# time (main.py imports auth.py eagerly), so the app failed to start at
+# all — not just Google sign-in — until this was declared directly.
+requests==2.32.3
 # Cashfree uses httpx (already above) — no extra SDK needed
