@@ -50,16 +50,22 @@ def _build(question: str, correct, distractors: List, explanation: str) -> Dict:
     failure mode — two options that evaluate to the same value), pads if
     dedup left too few, shuffles the position of the correct answer, and
     returns the same {question, options, answer, explanation} shape the LLM
-    path produces.
+    path produces — plus `option_tags`, a server-only (never sent to the
+    client) {letter: misconception} map so that picking a specific wrong
+    option identifies *which* likely mistake it represents, not just that
+    the answer was wrong. Each distractor may be a bare value (tagged
+    "computation_error" by default) or a (value, tag) pair for a specific,
+    named misconception.
     """
     correct_str = _fmt(correct)
     seen = {correct_str}
-    unique = []
+    unique = []  # list of (value_str, tag)
     for d in distractors:
-        s = _fmt(d)
+        value, tag = d if isinstance(d, tuple) and len(d) == 2 else (d, "computation_error")
+        s = _fmt(value)
         if s not in seen:
             seen.add(s)
-            unique.append(s)
+            unique.append((s, tag))
     # Extremely rare (tiny answer domains): pad with an offset numeric decoy.
     pad = 1
     while len(unique) < 3:
@@ -69,13 +75,15 @@ def _build(question: str, correct, distractors: List, explanation: str) -> Dict:
             candidate = f"{correct_str} (alt {pad})"
         if candidate not in seen:
             seen.add(candidate)
-            unique.append(candidate)
+            unique.append((candidate, "computation_error"))
         pad += 1
-    values = [correct_str] + unique[:3]
-    random.shuffle(values)
-    options = [f"{_LETTERS[i]}) {v}" for i, v in enumerate(values)]
-    answer = _LETTERS[values.index(correct_str)]
-    return {"question": question, "options": options, "answer": answer, "explanation": explanation}
+    entries = [(correct_str, None)] + unique[:3]
+    random.shuffle(entries)
+    options = [f"{_LETTERS[i]}) {v}" for i, (v, _tag) in enumerate(entries)]
+    answer = _LETTERS[[v for v, _t in entries].index(correct_str)]
+    option_tags = {_LETTERS[i]: tag for i, (_v, tag) in enumerate(entries) if tag}
+    return {"question": question, "options": options, "answer": answer,
+            "explanation": explanation, "option_tags": option_tags}
 
 
 def _int_range(level: Level, demand: Demand) -> tuple:
@@ -106,6 +114,47 @@ def _plus(value: int, var: str = "") -> str:
     return f" + {term}" if value >= 0 else f" - {term}"
 
 
+def _gen_arithmetic(level: Level, demand: Demand) -> Dict:
+    hi = {"basic": 20, "intermediate": 100, "advanced": 500, "expert": 1000}.get(level, 100)
+    if demand == "routine":
+        op = random.choice(["+", "-", "*"])
+        a, b = random.randint(1, hi), random.randint(1, hi)
+        if op == "-" and a < b:
+            a, b = b, a  # keep it in positives for a routine question
+        correct = {"+": a + b, "-": a - b, "*": a * b}[op]
+        q = f"{a} {op} {b} = ?"
+        explanation = f"{a} {op} {b} = {correct}."
+        distractors = [
+            (correct + 1, "arithmetic_slip"),
+            (correct - b if op == "+" else correct + b, "wrong_operation"),
+            (a * b if op != "*" else a + b, "wrong_operation"),
+        ]
+    elif demand == "multi_step":
+        a, b, c = random.randint(2, hi // 5 or 2), random.randint(2, hi // 5 or 2), random.randint(2, hi // 5 or 2)
+        q = f"{a} + {b} * {c} = ?"
+        correct = a + b * c
+        explanation = f"Multiply first (order of operations): {b}*{c} = {b * c}, then {a} + {b * c} = {correct}."
+        distractors = [
+            ((a + b) * c, "ignored_order_of_operations"),
+            (correct + 1, "arithmetic_slip"),
+            (a * b + c, "wrong_operation"),
+        ]
+    else:  # unfamiliar: fractions, so a memorized whole-number routine doesn't transfer directly
+        num1, den1 = random.randint(1, 5), random.randint(2, 6)
+        num2, den2 = random.randint(1, 5), random.randint(2, 6)
+        f1, f2 = Rational(num1, den1), Rational(num2, den2)
+        correct = f1 + f2
+        q = f"{num1}/{den1} + {num2}/{den2} = ?"
+        lcd = sp.ilcm(den1, den2)
+        explanation = f"Lowest common denominator {lcd}: {num1}/{den1} + {num2}/{den2} = {sp.sstr(correct)}."
+        distractors = [
+            (Rational(num1 + num2, den1 + den2), "added_numerators_and_denominators"),
+            (Rational(num1 * num2, den1 * den2), "multiplied_instead_of_added"),
+            (correct + 1, "arithmetic_slip"),
+        ]
+    return _build(q, correct, distractors, explanation)
+
+
 def _gen_algebra_linear(level: Level, demand: Demand) -> Dict:
     lo, hi = _int_range(level, demand)
     a = random.randint(max(2, lo), hi)
@@ -133,7 +182,11 @@ def _gen_algebra_linear(level: Level, demand: Demand) -> Dict:
             f"{_term(a - d, 'x')} = {rhs_const - b}, so x = {root}."
         )
     correct = root
-    distractors = [root + 1, root - 1, -root, root * 2 if root != 0 else root + 5]
+    distractors = [
+        (root + 1, "arithmetic_slip"),
+        (-root, "sign_error"),  # forgot to flip the sign when moving a term across "="
+        (root * 2 if root != 0 else root + 5, "forgot_to_divide"),  # left the coefficient un-divided
+    ]
     return _build(q, correct, distractors, explanation)
 
 
@@ -150,9 +203,9 @@ def _gen_algebra_quadratic(level: Level, demand: Demand) -> Dict:
     roots = sorted([r1, r2])
     correct = f"x = {roots[0]} or x = {roots[1]}"
     distractors = [
-        f"x = {roots[0]} or x = {-roots[1]}",
-        f"x = {-roots[0]} or x = {roots[1]}",
-        f"x = {roots[0] + 1} or x = {roots[1]}",
+        (f"x = {roots[0]} or x = {-roots[1]}", "sign_error"),  # flipped the sign of one root
+        (f"x = {-roots[0]} or x = {roots[1]}", "sign_error"),  # flipped the sign of the other root
+        (f"x = {roots[0] + 1} or x = {roots[1]}", "arithmetic_slip"),
     ]
     factor = lambda r: f"x - {r}" if r >= 0 else f"x + {-r}"
     explanation = f"Factors as ({factor(r1)})({factor(r2)}) = 0, so x = {r1} or x = {r2}."
@@ -192,7 +245,11 @@ def _gen_calculus_derivative(level: Level, demand: Demand) -> Dict:
     correct = diff(expr, x)
     # Plausible mistakes: forgetting the chain/product rule, off-by-one power, sign slip
     wrong_power = diff(expr, x) + 1 if not expr.has(sin, cos, tan) else -correct
-    distractors = [expr, wrong_power, -correct]
+    distractors = [
+        (expr, "forgot_to_differentiate"),  # copied the original function as-is
+        (wrong_power, "off_by_one_or_missing_chain_rule"),
+        (-correct, "sign_error"),
+    ]
     explanation = f"d/dx({sp.sstr(expr)}) = {sp.sstr(correct)}, by standard differentiation rules."
     return _build(q, correct, distractors, explanation)
 
@@ -206,9 +263,9 @@ def _gen_calculus_integral(level: Level, demand: Demand) -> Dict:
     correct = f"{sp.sstr(correct_expr)} + C"
     wrong_no_div = f"{sp.sstr(a * x ** (n + 1))} + C"  # forgot to divide by (n+1)
     distractors = [
-        wrong_no_div,
-        f"{sp.sstr(a * (n) * x ** (n - 1))} + C",  # differentiated instead of integrating
-        f"{sp.sstr(correct_expr)}",  # forgot + C
+        (wrong_no_div, "forgot_to_divide_by_new_exponent"),
+        (f"{sp.sstr(a * (n) * x ** (n - 1))} + C", "differentiated_instead_of_integrated"),
+        (f"{sp.sstr(correct_expr)}", "forgot_constant_of_integration"),
     ]
     explanation = f"Power rule: integral of x^n dx = x^(n+1)/(n+1) + C, so this is {correct}."
     return _build(q, correct, distractors, explanation)
@@ -226,9 +283,9 @@ def _gen_trigonometry(level: Level, demand: Demand) -> Dict:
     q = f"{func_name}({deg}°) = ?"
     correct = val
     distractors = [
-        simplify(func(sp.rad(90 - deg))) if 90 - deg != deg else simplify(-val),
-        simplify(-val),
-        simplify(val + Rational(1, 2)) if val.is_rational else simplify(val * 2),
+        (simplify(func(sp.rad(90 - deg))) if 90 - deg != deg else simplify(-val), "confused_with_complementary_angle"),
+        (simplify(-val), "sign_error"),
+        (simplify(val + Rational(1, 2)) if val.is_rational else simplify(val * 2), "arithmetic_slip"),
     ]
     explanation = f"{func_name}({deg}°) = {sp.sstr(val)}, a standard angle value."
     return _build(q, correct, distractors, explanation)
@@ -295,12 +352,13 @@ def _gen_linear_algebra_det(level: Level, demand: Demand) -> Dict:
     mat = sp.Matrix([[a, b], [c, d]])
     q = f"det([[{a},{b}],[{c},{d}]]) = ?"
     correct = mat.det()
-    distractors = [a * d + b * c, a * c - b * d, correct + 1]
+    distractors = [(a * d + b * c, "sign_error"), (a * c - b * d, "wrong_diagonal_pairing"), (correct + 1, "arithmetic_slip")]
     explanation = f"det = ad - bc = ({a})({d}) - ({b})({c}) = {correct}."
     return _build(q, correct, distractors, explanation)
 
 
 _GENERATORS: Dict[str, Callable[[Level, Demand], Dict]] = {
+    "arithmetic": _gen_arithmetic,
     "algebra": _gen_algebra_linear,
     "algebra_linear": _gen_algebra_linear,
     "algebra_quadratic": _gen_algebra_quadratic,

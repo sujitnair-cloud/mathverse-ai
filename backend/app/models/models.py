@@ -97,6 +97,44 @@ class QuizSession(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class SkillAttempt(Base):
+    """
+    Permanent evidence log for the learning journey (Phase 5): one row per
+    answered practice/diagnostic/review question. This is what "track
+    performance across time, not just one quiz" and "repeated
+    misconceptions" are computed from — grouped by (session_id, topic) and
+    ordered by created_at, not by any single attempt in isolation.
+    """
+    __tablename__ = "skill_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(64), index=True, nullable=False)
+    topic = Column(String(100), index=True, nullable=False)
+    stage = Column(String(20), nullable=False)  # diagnostic | guided | independent | review
+    correct = Column(Boolean, nullable=False)
+    hints_used = Column(Integer, default=0)
+    misconception = Column(String(100))  # tag identifying *which* likely mistake, not just "wrong"
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class SkillQuestion(Base):
+    """
+    Ephemeral single-use holding pen for one served practice question —
+    mirrors QuizSession's pattern (server holds the answer key; the client
+    only ever sees the question) but scoped to one question at a time so
+    the learning journey can give immediate per-question feedback and
+    remediation instead of only a batch score at the end.
+    """
+    __tablename__ = "skill_questions"
+
+    id = Column(String(64), primary_key=True)
+    session_id = Column(String(64), index=True, nullable=False)
+    topic = Column(String(100), nullable=False)
+    stage = Column(String(20), nullable=False)
+    question = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 

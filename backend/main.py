@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.routes import solve, graph, formula, topics, quiz, history, user, admin, auth, payments
+from app.api.routes import solve, graph, formula, topics, quiz, history, user, admin, auth, payments, learning
 
 
 @asynccontextmanager
@@ -44,6 +44,7 @@ app.include_router(graph.router, prefix="/api/v1", tags=["Graph"])
 app.include_router(formula.router, prefix="/api/v1", tags=["Formulas"])
 app.include_router(topics.router, prefix="/api/v1", tags=["Topics"])
 app.include_router(quiz.router, prefix="/api/v1", tags=["Quiz"])
+app.include_router(learning.router, prefix="/api/v1", tags=["Learning"])
 app.include_router(history.router, prefix="/api/v1", tags=["History"])
 app.include_router(user.router, prefix="/api/v1", tags=["User"])
 app.include_router(admin.router, prefix="/api/v1", tags=["Admin"])

@@ -9,6 +9,7 @@ import FormulaLibrary from './pages/FormulaLibrary'
 import TopicWiki from './pages/TopicWiki'
 import GraphCalculator from './pages/GraphCalculator'
 import Quiz from './pages/Quiz'
+import LearningJourney from './pages/LearningJourney'
 import History from './pages/History'
 import Profile from './pages/Profile'
 import Admin from './pages/Admin'
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/topics" element={<TopicWiki />} />
               <Route path="/graph" element={<GraphCalculator />} />
               <Route path="/quiz" element={<Quiz />} />
+              <Route path="/learn" element={<LearningJourney />} />
               <Route path="/history" element={<History />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/admin" element={<Admin />} />
