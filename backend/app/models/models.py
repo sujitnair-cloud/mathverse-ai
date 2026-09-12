@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, Boolean, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -84,6 +84,44 @@ class QuizAttempt(Base):
     total_questions = Column(Integer)
     answers = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Classroom(Base):
+    __tablename__ = 'classrooms'
+    id = Column(Integer, primary_key=True)
+    teacher_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    join_code = Column(String(32), nullable=False, unique=True)
+
+
+class ClassMember(Base):
+    __tablename__ = 'class_members'
+    __table_args__ = (UniqueConstraint('classroom_id', 'user_id'),)
+    id = Column(Integer, primary_key=True)
+    classroom_id = Column(Integer, ForeignKey('classrooms.id'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+
+
+class Assignment(Base):
+    __tablename__ = 'assignments'
+    id = Column(Integer, primary_key=True)
+    classroom_id = Column(Integer, ForeignKey('classrooms.id'), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    instructions = Column(Text, nullable=False)
+    due_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AssignmentSubmission(Base):
+    __tablename__ = 'assignment_submissions'
+    __table_args__ = (UniqueConstraint('assignment_id', 'student_id'),)
+    id = Column(Integer, primary_key=True)
+    assignment_id = Column(Integer, ForeignKey('assignments.id'), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    work = Column(Text, nullable=False)
+    score = Column(Float)
+    feedback = Column(Text)
+    submitted_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class UserProfile(Base):

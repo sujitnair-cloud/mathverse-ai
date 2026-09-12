@@ -5,10 +5,11 @@ import BottomNav from './BottomNav'
 export default function Layout() {
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 transition-colors">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:block focus:p-3 focus:text-white">Skip to main content</a>
       <Navbar />
 
       {/* Extra bottom padding on mobile so content isn't hidden behind BottomNav */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 pb-24 md:pb-8">
+      <main id="main-content" tabIndex={-1} className="max-w-7xl mx-auto px-4 sm:px-6 py-6 pb-24 md:pb-8">
         <Outlet />
       </main>
 

@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { to: '/topics', label: 'Topics', icon: BookOpen },
   { to: '/graph', label: 'Graphing', icon: BarChart2 },
   { to: '/quiz', label: 'Quiz', icon: Trophy },
+  { to: '/classrooms', label: 'Classes', icon: BookOpen },
   { to: '/history', label: 'History', icon: History },
 ]
 
@@ -53,7 +54,7 @@ export default function Navbar() {
           </Link>
 
           {/* Desktop Nav */}
-          <div className="hidden md:flex items-center gap-1">
+          <div className="hidden xl:flex items-center gap-1">
             {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
               <Link
                 key={to}
@@ -153,7 +154,7 @@ export default function Navbar() {
 
             {/* Mobile menu toggle */}
             <button
-              className="md:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50"
+              className="xl:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50"
               onClick={() => setMenuOpen(o => !o)}
             >
               {menuOpen ? <X size={20} /> : <Menu size={20} />}
@@ -163,7 +164,7 @@ export default function Navbar() {
 
         {/* Mobile menu */}
         {menuOpen && (
-          <div className="md:hidden pb-3 border-t border-slate-700/50 pt-2 animate-fade-in">
+          <div className="xl:hidden pb-3 border-t border-slate-700/50 pt-2 animate-fade-in">
             {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
               <Link
                 key={to}

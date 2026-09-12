@@ -95,6 +95,12 @@ export default function Home() {
       </section>
 
       {/* Features */}
+      <section className="mb-8 rounded-2xl border border-indigo-400/30 bg-indigo-500/10 p-6 sm:p-8">
+        <p className="mb-2 text-sm font-medium text-indigo-300">FOR STUDENTS AND TEACHERS</p>
+        <h2 className="text-2xl font-bold text-white">A shared space for your next breakthrough</h2>
+        <p className="mb-5 mt-3 max-w-2xl text-slate-300">Bring your class together. Share math assignments, submit your working, and learn from personal teacher feedback.</p>
+        <a href="/classrooms" className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 font-medium text-white hover:bg-indigo-500">Open classrooms <ArrowRight size={16} /></a>
+      </section>
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-16">
         {FEATURES.map(({ icon: Icon, title, desc, href }) => (
           <a
