@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 from app.core.database import get_db
 from app.core.auth import get_current_user
+from app.api.routes.history import history_owner
+from app.core.limiter import limiter
 from app.models.models import SolveHistory, User
 from app.services.math_engine import solve_expression, is_llm_first_problem, detect_difficulty as auto_detect_difficulty
 from app.services.llm_service import get_explanation, llm_full_solve
@@ -21,7 +23,7 @@ PLAN_LIMITS = {
     "school":  9999,
 }
 
-ANON_LIMIT = 3  # anonymous users get 3 solves ever, then must sign in
+ANON_LIMIT = 6  # anonymous users get 6 solves ever, then must sign in
 
 
 class SolveRequest(BaseModel):
@@ -49,13 +51,16 @@ class SolveResponse(BaseModel):
 
 
 @router.post("/solve", response_model=SolveResponse)
+@limiter.limit("30/minute")
 async def solve_problem(
+    request: Request,
     req: SolveRequest,
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user),
 ):
     if not req.problem.strip():
         raise HTTPException(status_code=400, detail="Problem cannot be empty.")
+    owner = history_owner(req.session_id, current_user)
 
     # ── Usage limit check ─────────────────────────────────────────────────────
     if current_user:
@@ -65,6 +70,8 @@ async def solve_problem(
 
         now = datetime.now(timezone.utc)
         reset_at = current_user.daily_solves_reset_at
+        if reset_at is not None and reset_at.tzinfo is None:
+            reset_at = reset_at.replace(tzinfo=timezone.utc)
         if reset_at is None or (now - reset_at).days >= 1:
             current_user.daily_solves = 0
             current_user.daily_solves_reset_at = now
@@ -102,12 +109,14 @@ async def solve_problem(
         solves_limit = ANON_LIMIT
 
     # ── Solve ─────────────────────────────────────────────────────────────────
-    # Auto-detect difficulty from the problem text; use it when user hasn't overridden
     detected_difficulty = auto_detect_difficulty(req.problem)
     explanation_level = req.difficulty or detected_difficulty
 
+    # Determine if the user has a paid plan (Student / Pro / School)
+    user_plan = (current_user.subscription_plan if current_user else None) or "free"
+    is_paid = user_plan in ("student", "pro", "school")
+
     explanation = None
-    # Default skeleton — always defined so the return block is safe
     result: dict = {
         "problem": req.problem,
         "topic": "algebra_general",
@@ -123,22 +132,31 @@ async def solve_problem(
     }
 
     if is_llm_first_problem(req.problem):
-        # Word problem / proof / aptitude → skip SymPy, go straight to LLM
-        llm_result = await llm_full_solve(req.problem, explanation_level)
-        if llm_result and llm_result.get("_quota_exceeded"):
-            result["error"] = (
-                "Daily AI quota reached. Your question will be answered via the structured solver. "
-                "Quota resets at midnight UTC."
-            )
-        elif llm_result:
-            explanation = llm_result.pop("explanation", None)
-            result.update(llm_result)
+        if is_paid:
+            # Word problem / proof → LLM for paid users
+            llm_result = await llm_full_solve(req.problem, explanation_level)
+            if llm_result and llm_result.get("_quota_exceeded"):
+                result["error"] = (
+                    "Daily AI quota reached. Your question will be answered via the structured solver. "
+                    "Quota resets at midnight UTC."
+                )
+            elif llm_result:
+                explanation = llm_result.pop("explanation", None)
+                result.update(llm_result)
+            else:
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, solve_expression, req.problem)
         else:
-            # No LLM configured — try SymPy anyway
+            # Free users: SymPy only for word problems
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, solve_expression, req.problem)
+            if not result.get("answer") or str(result.get("answer", "")).startswith("See steps"):
+                result["error"] = (
+                    "Word problems and applied questions require a Student or Pro plan. "
+                    "Upgrade to unlock full AI solving."
+                )
     else:
-        # Standard path: SymPy first (non-blocking thread), LLM fallback if it fails
+        # Standard path: SymPy first, LLM fallback only for paid users
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, solve_expression, req.problem)
 
@@ -149,23 +167,20 @@ async def solve_problem(
             answer_str.startswith("Please ") or
             answer_str.startswith("See steps")
         )
-        if sympy_failed:
+        if sympy_failed and is_paid:
             llm_result = await llm_full_solve(req.problem, explanation_level)
             if llm_result and llm_result.get("_quota_exceeded"):
-                result["error"] = (
-                    "Daily AI quota reached. Quota resets at midnight UTC."
-                )
+                result["error"] = "Daily AI quota reached. Quota resets at midnight UTC."
             elif llm_result:
                 explanation = llm_result.pop("explanation", None)
                 result.update(llm_result)
                 result["error"] = None
 
-    # Propagate auto-detected difficulty onto result so frontend can highlight it
     if not result.get("difficulty"):
         result["difficulty"] = detected_difficulty
 
     if explanation is None and req.include_explanation:
-        explanation = await get_explanation(req.problem, result, explanation_level)
+        explanation = await get_explanation(req.problem, result, explanation_level, plan=user_plan)
 
     # For word problems: if SymPy returned "See steps" but the LLM explanation
     # starts with "**Final Answer:** ...", extract that as the concise answer.
@@ -177,7 +192,7 @@ async def solve_problem(
 
     # Persist to history
     history = SolveHistory(
-        session_id=req.session_id if not current_user else str(current_user.id),
+        session_id=owner,
         problem=req.problem,
         topic=result.get("topic"),
         difficulty=result.get("difficulty"),

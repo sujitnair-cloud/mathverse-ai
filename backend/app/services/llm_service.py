@@ -23,8 +23,8 @@ from app.services.quiz_generator import generate_verified_questions
 # or similar questions. Cache survives the process lifetime (cleared on restart).
 _SOLVE_CACHE: dict = {}   # llm_full_solve results
 _EXPL_CACHE: dict = {}    # get_explanation results
-_CACHE_TTL: int = 86400   # 24 hours in seconds
-_CACHE_MAX: int = 1000    # max entries before evicting oldest
+_CACHE_TTL: int = 259200  # 72 hours in seconds
+_CACHE_MAX: int = 5000    # max entries before evicting oldest
 
 def _ck(*parts) -> str:
     return hashlib.md5("|".join(str(p) for p in parts).encode()).hexdigest()
@@ -355,6 +355,10 @@ async def _call_openai(prompt: str, max_tokens: int = 1024) -> str:
 
 async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     import sys
+    api_keys = _get_gemini_keys()
+    if not api_keys:
+        raise RuntimeError("No Gemini API key configured")
+
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens},
@@ -370,51 +374,63 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
 
     async with httpx.AsyncClient(timeout=60) as client:
         last_err: Exception = RuntimeError("No Gemini model responded successfully")
-        quota_exceeded_models: list = []
+        exhausted_key_count = 0
 
-        for model in models_to_try:
-            for api_ver in api_versions:
-                base_url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
-                            f"{model}:generateContent")
-                auth_variants = [
-                    (base_url, {"x-goog-api-key": settings.GEMINI_API_KEY}),
-                    (f"{base_url}?key={settings.GEMINI_API_KEY}", {}),
-                    (base_url, {"Authorization": f"Bearer {settings.GEMINI_API_KEY}"}),
-                ]
-                for url, extra_headers in auth_variants:
-                    auth_label = list(extra_headers.keys())[0] if extra_headers else "query-param"
-                    try:
-                        resp = await client.post(url, json=payload, headers=extra_headers)
-                        print(f"[MathVerse] {model}/{api_ver}/{auth_label} → HTTP {resp.status_code}", file=sys.stderr)
-                        if resp.status_code == 404:
-                            break
-                        if resp.status_code in (400, 401, 403):
-                            print(f"[MathVerse] Error body: {resp.text[:300]}", file=sys.stderr)
-                            continue
-                        if resp.status_code == 429:
-                            print(f"[MathVerse] Quota exceeded for {model}", file=sys.stderr)
-                            quota_exceeded_models.append(model)
-                            break  # skip remaining auth variants for this model
-                        resp.raise_for_status()
-                        parts = resp.json()["candidates"][0]["content"]["parts"]
-                        text = ""
-                        for part in parts:
-                            if not part.get("thought", False) and "text" in part:
-                                text = part["text"]
+        for key_idx, api_key in enumerate(api_keys):
+            key_label = f"key#{key_idx + 1}/{len(api_keys)}"
+            quota_hit = False
+
+            for model in models_to_try:
+                if quota_hit:
+                    break
+                for api_ver in api_versions:
+                    if quota_hit:
+                        break
+                    base_url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
+                                f"{model}:generateContent")
+                    auth_variants = [
+                        (base_url, {"x-goog-api-key": api_key}),
+                        (f"{base_url}?key={api_key}", {}),
+                        (base_url, {"Authorization": f"Bearer {api_key}"}),
+                    ]
+                    for url, extra_headers in auth_variants:
+                        auth_label = list(extra_headers.keys())[0] if extra_headers else "query-param"
+                        try:
+                            resp = await client.post(url, json=payload, headers=extra_headers)
+                            print(f"[MathVerse] {key_label} {model}/{api_ver}/{auth_label} → HTTP {resp.status_code}", file=sys.stderr)
+                            if resp.status_code == 404:
                                 break
-                        if not text:
-                            text = parts[-1].get("text", "")
-                        print(f"[MathVerse] Gemini REST success: {model} ({api_ver})", file=sys.stderr)
-                        return text
-                    except Exception as e:
-                        last_err = e
-                        continue
+                            if resp.status_code in (400, 401, 403):
+                                print(f"[MathVerse] Error body: {resp.text[:300]}", file=sys.stderr)
+                                continue
+                            if resp.status_code == 429:
+                                print(f"[MathVerse] {key_label}: quota exceeded, trying next key", file=sys.stderr)
+                                quota_hit = True
+                                break
+                            resp.raise_for_status()
+                            parts = resp.json()["candidates"][0]["content"]["parts"]
+                            text = ""
+                            for part in parts:
+                                if not part.get("thought", False) and "text" in part:
+                                    text = part["text"]
+                                    break
+                            if not text:
+                                text = parts[-1].get("text", "")
+                            print(f"[MathVerse] Gemini REST success: {key_label} {model} ({api_ver})", file=sys.stderr)
+                            return text
+                        except Exception as e:
+                            last_err = e
+                            continue
 
-        # If every model hit quota, raise a specific error so callers can show a friendly message
-        if len(quota_exceeded_models) >= len(models_to_try):
+            if quota_hit:
+                exhausted_key_count += 1
+
+        if exhausted_key_count >= len(api_keys):
+            n = len(api_keys)
             raise QuotaExhaustedError(
-                "Daily AI quota exhausted. The solver will reset at midnight UTC. "
-                "Upgrade to a paid Gemini API key for unlimited access."
+                f"Daily AI quota exhausted across all {n} configured API key(s). "
+                "The solver will reset at midnight UTC. "
+                "Add more GEMINI_API_KEYS or upgrade to a paid plan for unlimited access."
             )
     raise last_err
 
@@ -457,14 +473,30 @@ def _key_looks_real(key: str) -> bool:
     return bool(key) and key not in placeholders and len(key) > 20
 
 
+def _get_gemini_keys() -> list:
+    """Return all configured Gemini API keys, deduped and validated. Primary key first."""
+    keys: list = []
+    if settings.GEMINI_API_KEYS:
+        for k in settings.GEMINI_API_KEYS.split(","):
+            k = k.strip()
+            if _key_looks_real(k) and k not in keys:
+                keys.append(k)
+    if _key_looks_real(settings.GEMINI_API_KEY) and settings.GEMINI_API_KEY not in keys:
+        keys.append(settings.GEMINI_API_KEY)
+    return keys
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
-async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "intermediate") -> str:
+async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "intermediate", plan: str = "free") -> str:
     """
     Return an explanation for a solved math problem.
-    Tries the configured LLM provider first; falls back to the rich built-in
-    explainer if no valid key is present or if the LLM call fails.
-    Results are cached 24 h so repeated identical questions cost zero quota.
+    Free-plan users receive the structured fallback (no LLM call, zero quota cost).
+    Student/Pro users get a full LLM explanation, cached 72 h.
     """
+    # Free users: return structured fallback immediately — no LLM cost
+    if plan not in ("student", "pro", "school"):
+        return _rich_fallback(problem, sympy_result, difficulty)
+
     cache_key = _ck(problem, difficulty)
     cached = _cache_get(_EXPL_CACHE, cache_key)
     if cached is not None:
@@ -496,7 +528,7 @@ async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "i
         except Exception as e:
             result_text = _rich_fallback(problem, sympy_result, difficulty) + f"\n\n---\n*LLM error: {e}*"
 
-    elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
+    elif provider == "gemini" and _get_gemini_keys():
         try:
             result_text = await _call_gemini(_build_prompt(problem, sympy_result, difficulty))
         except QuotaExhaustedError:
@@ -528,7 +560,7 @@ async def llm_full_solve(problem: str, difficulty: str = "intermediate") -> Opti
     has_llm = (
         (provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY)) or
         (provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY)) or
-        (provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY))
+        (provider == "gemini" and bool(_get_gemini_keys()))
     )
     if not has_llm:
         print(f"[MathVerse] llm_full_solve: no LLM configured (provider={provider!r})", file=sys.stderr)
@@ -735,7 +767,7 @@ No extra text — pure JSON array only."""
             raw = await _call_anthropic(prompt)
         elif provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
             raw = await _call_openai(prompt)
-        elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
+        elif provider == "gemini" and _get_gemini_keys():
             raw = await _call_gemini(prompt)
 
         if raw:

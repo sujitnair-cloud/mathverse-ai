@@ -13,20 +13,22 @@ const PLANS = [
     id: 'free',
     name: 'Free',
     icon: Star,
-    price: { monthly: 0, annual: 0 },
+    priceInr: 0,
+    priceDisplay: 'Free',
     color: 'slate',
     badge: null,
     description: 'Perfect for casual learners',
     cta: 'Get started free',
     features: [
-      { text: '10 AI solves per day', included: true },
+      { text: '6 AI solves without sign-in', included: true },
+      { text: '10 AI solves per day (signed in)', included: true },
       { text: 'Step-by-step solutions', included: true },
       { text: 'Formula library', included: true },
       { text: '5 quiz questions per session', included: true },
       { text: 'Basic graphing', included: true },
       { text: 'Full AI explanations', included: false },
+      { text: 'Word & applied problem solving', included: false },
       { text: 'Unlimited solves', included: false },
-      { text: 'PDF export', included: false },
       { text: 'History & progress tracking', included: false },
     ],
   },
@@ -34,14 +36,16 @@ const PLANS = [
     id: 'student',
     name: 'Student',
     icon: Zap,
-    price: { monthly: 4.99, annual: 3.99 },
+    priceInr: 83,
+    priceDisplay: '₹83',
     color: 'indigo',
     badge: 'Most Popular',
     description: 'For serious students who solve daily',
-    cta: 'Start 7-day free trial',
+    cta: 'Start 2-day free trial',
     features: [
       { text: 'Unlimited AI solves', included: true },
       { text: 'Full step-by-step solutions', included: true },
+      { text: 'Word & applied problem solving', included: true },
       { text: 'Complete formula library', included: true },
       { text: 'Unlimited quiz questions', included: true },
       { text: 'Advanced graphing (2D + 3D)', included: true },
@@ -55,11 +59,12 @@ const PLANS = [
     id: 'pro',
     name: 'Pro',
     icon: Building2,
-    price: { monthly: 9.99, annual: 7.99 },
+    priceInr: 349,
+    priceDisplay: '₹349',
     color: 'purple',
     badge: 'Best Value',
     description: 'For educators and power users',
-    cta: 'Start 7-day free trial',
+    cta: 'Start 2-day free trial',
     features: [
       { text: 'Everything in Student', included: true },
       { text: 'PDF export of solutions', included: true },
@@ -74,36 +79,43 @@ const PLANS = [
 ]
 
 const FAQS = [
-  { q: 'Can I cancel anytime?', a: 'Yes. Cancel from your billing portal with one click. You keep access until the end of your billing period.' },
-  { q: 'Is there a free trial?', a: 'Student and Pro plans include a 7-day free trial. No charge until the trial ends. Cancel anytime.' },
-  { q: 'What payment methods are accepted?', a: 'All major credit/debit cards (Visa, Mastercard, Amex), and UPI via Stripe.' },
-  { q: 'Can I switch plans?', a: 'Yes, upgrade or downgrade anytime. Upgrades take effect immediately with prorated billing.' },
-  { q: 'Do you offer student discounts?', a: 'The Student plan at $4.99/month IS the student discount. Email us with your .edu address for an extra 20% off.' },
-  { q: 'Is my data safe?', a: 'All data is encrypted in transit (HTTPS) and at rest. We never sell your data. See our Privacy Policy.' },
+  { q: 'Can I cancel anytime?', a: 'Yes. Use the Cancel Subscription button in your account settings. You keep access until the end of your billing period.' },
+  { q: 'Is there a free trial?', a: 'Student and Pro plans include a 2-day free trial. No charge until the trial ends. Cancel anytime before the trial ends.' },
+  { q: 'What payment methods are accepted?', a: 'All major credit/debit cards (Visa, Mastercard, Amex), UPI, net banking, and wallets via Cashfree.' },
+  { q: 'Can I switch plans?', a: 'Yes, upgrade or downgrade anytime. Upgrades take effect immediately.' },
+  { q: 'Do you offer student discounts?', a: 'The Student plan at ₹83/month is built-in affordable pricing for learners — no coupon needed.' },
+  { q: 'Is my data safe?', a: 'All data is encrypted in transit (HTTPS) and at rest. We never sell your data. Payments are processed securely by Cashfree.' },
 ]
 
 export default function Pricing() {
-  const [annual, setAnnual] = useState(false)
   const [loading, setLoading] = useState<string | null>(null)
   const { user, token } = useAuth()
   const navigate = useNavigate()
 
-  const handleUpgrade = async (planId: string, price: number) => {
+  const handleUpgrade = async (planId: string) => {
     if (planId === 'free') { navigate('/solver'); return }
     if (!user) { navigate('/login'); return }
 
-    analytics.beginCheckout(planId, price)
+    const plan = PLANS.find(p => p.id === planId)!
+    analytics.beginCheckout(planId, plan.priceInr)
     setLoading(planId)
+
     try {
       const origin = window.location.origin
-      const { data } = await axios.post(`${API}/payments/create-checkout`, {
-        plan: planId,
-        success_url: `${origin}/pricing?success=1`,
-        cancel_url: `${origin}/pricing`,
-      }, { headers: { Authorization: `Bearer ${token}` } })
+      const { data } = await axios.post(
+        `${API}/payments/create-order`,
+        {
+          plan: planId,
+          success_url: `${origin}/pricing?success=1`,
+          cancel_url: `${origin}/pricing`,
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      // Redirect to Cashfree hosted checkout page
       window.location.href = data.checkout_url
-    } catch {
-      alert('Could not start checkout. Stripe payments may not be configured yet.')
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      alert(msg || 'Could not start checkout. Please try again or contact support.')
     } finally {
       setLoading(null)
     }
@@ -136,32 +148,11 @@ export default function Pricing() {
         <p className="text-slate-400 text-lg max-w-xl mx-auto">
           Start free. Upgrade when you need unlimited power. Cancel anytime.
         </p>
-
-        {/* Annual toggle */}
-        <div className="flex items-center justify-center gap-3 mt-8">
-          <span className={clsx('text-sm', !annual ? 'text-white' : 'text-slate-400')}>Monthly</span>
-          <button
-            onClick={() => setAnnual(a => !a)}
-            className={clsx(
-              'relative w-12 h-6 rounded-full transition-colors',
-              annual ? 'bg-indigo-600' : 'bg-slate-600'
-            )}
-          >
-            <span className={clsx(
-              'absolute top-1 w-4 h-4 rounded-full bg-white transition-transform',
-              annual ? 'translate-x-7' : 'translate-x-1'
-            )} />
-          </button>
-          <span className={clsx('text-sm', annual ? 'text-white' : 'text-slate-400')}>
-            Annual <span className="text-emerald-400 text-xs font-semibold ml-1">Save 20%</span>
-          </span>
-        </div>
       </div>
 
       {/* Plans */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16">
         {PLANS.map(plan => {
-          const price = annual ? plan.price.annual : plan.price.monthly
           const Icon = plan.icon
           const isPopular = plan.badge === 'Most Popular'
           const isPro = plan.id === 'pro'
@@ -202,21 +193,17 @@ export default function Pricing() {
               {/* Price */}
               <div className="mb-6">
                 <div className="flex items-end gap-1">
-                  <span className="text-4xl font-bold text-white">
-                    {price === 0 ? 'Free' : `$${price}`}
-                  </span>
-                  {price > 0 && <span className="text-slate-400 text-sm mb-1">/month</span>}
+                  <span className="text-4xl font-bold text-white">{plan.priceDisplay}</span>
+                  {plan.priceInr > 0 && <span className="text-slate-400 text-sm mb-1">/month</span>}
                 </div>
-                {annual && price > 0 && (
-                  <p className="text-emerald-400 text-xs mt-1">
-                    Billed ${(price * 12).toFixed(0)}/year · Save ${((plan.price.monthly - price) * 12).toFixed(0)}
-                  </p>
+                {plan.priceInr > 0 && (
+                  <p className="text-indigo-300 text-xs mt-1">2-day free trial · No charge until trial ends</p>
                 )}
               </div>
 
               {/* CTA */}
               <button
-                onClick={() => handleUpgrade(plan.id, price)}
+                onClick={() => handleUpgrade(plan.id)}
                 disabled={loading === plan.id}
                 className={clsx(
                   'w-full py-3 rounded-xl font-semibold text-sm transition-all mb-6',
@@ -228,7 +215,7 @@ export default function Pricing() {
                     : 'bg-slate-700 hover:bg-slate-600 text-white'
                 )}
               >
-                {loading === plan.id ? 'Redirecting…' : plan.cta}
+                {loading === plan.id ? 'Opening checkout…' : plan.cta}
               </button>
 
               {/* Features */}
@@ -249,7 +236,7 @@ export default function Pricing() {
 
       {/* Trust badges */}
       <div className="flex flex-wrap justify-center gap-6 mb-16 text-sm text-slate-400">
-        {['🔒 Secured by Stripe', '✅ Cancel anytime', '7-day free trial', '💳 No hidden fees', '🌍 Works worldwide'].map(t => (
+        {['🔒 Secured by Cashfree', '✅ Cancel anytime', '🎁 2-day free trial', '💳 UPI & cards accepted', '🌍 Works worldwide'].map(t => (
           <span key={t} className="bg-slate-800/60 border border-slate-700/50 px-4 py-2 rounded-full">{t}</span>
         ))}
       </div>

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    GEMINI_API_KEYS: str = ""  # comma-separated extra keys; rotated automatically when quota is hit
     OPENAI_MODEL: str = "gpt-4o"
     ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
     GEMINI_MODEL: str = "gemini-2.5-flash"
@@ -47,12 +48,13 @@ class Settings(BaseSettings):
     # Example: ADMIN_EMAILS=you@gmail.com,partner@gmail.com
     ADMIN_EMAILS: str = ""
 
-    # Stripe — get from dashboard.stripe.com
-    STRIPE_SECRET_KEY: str = ""
-    STRIPE_PUBLISHABLE_KEY: str = ""
-    STRIPE_WEBHOOK_SECRET: str = ""
-    STRIPE_STUDENT_PRICE_ID: str = ""   # $4.99/mo price ID from Stripe dashboard
-    STRIPE_PRO_PRICE_ID: str = ""       # $9.99/mo price ID from Stripe dashboard
+    # Cashfree — get from merchant.cashfree.com → Developers → API Keys
+    CASHFREE_APP_ID: str = ""
+    CASHFREE_SECRET_KEY: str = ""
+    CASHFREE_WEBHOOK_SECRET: str = ""
+    CASHFREE_ENV: str = "test"          # "test" or "production"
+    CASHFREE_STUDENT_PLAN_ID: str = ""
+    CASHFREE_PRO_PLAN_ID: str = ""
 
     @property
     def origins(self) -> List[str]:
