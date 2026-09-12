@@ -2,7 +2,24 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
 
-engine = create_async_engine(settings.async_database_url, echo=settings.DEBUG)
+
+def _make_engine():
+    url = settings.async_database_url
+    if url.startswith("sqlite"):
+        # SQLite: no pool_size / max_overflow — uses StaticPool by default
+        return create_async_engine(url, echo=settings.DEBUG)
+    # PostgreSQL: explicit pool sizing for production load
+    return create_async_engine(
+        url,
+        echo=settings.DEBUG,
+        pool_size=20,
+        max_overflow=30,
+        pool_pre_ping=True,  # drop and reconnect stale connections
+        pool_recycle=1800,   # recycle connections every 30 min
+    )
+
+
+engine = _make_engine()
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

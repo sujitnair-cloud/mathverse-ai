@@ -4,7 +4,7 @@ POST /api/v1/auth/google  — exchange Google ID token for our JWT
 GET  /api/v1/auth/me      — return current user info
 POST /api/v1/auth/logout  — client-side only (just returns success)
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.auth import create_access_token, get_current_user
+from app.core.limiter import limiter
 from app.models.models import User
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -31,7 +32,8 @@ class AuthResponse(BaseModel):
 
 
 @router.post("/google", response_model=AuthResponse)
-async def google_auth(body: GoogleTokenRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def google_auth(request: Request, body: GoogleTokenRequest, db: AsyncSession = Depends(get_db)):
     if not settings.GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=503, detail="Google OAuth not configured on this server")
 

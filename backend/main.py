@@ -1,26 +1,47 @@
 """
 MathVerse AI — FastAPI Backend Entry Point
 """
-from fastapi import FastAPI
+import sys
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db
+from app.core.limiter import limiter
 from app.api.routes import solve, graph, formula, topics, quiz, history, user, admin, auth, payments
+
+
+def _validate_secrets():
+    if settings.has_weak_secrets:
+        msg = (
+            "[MathVerse] SECURITY WARNING: SECRET_KEY and/or JWT_SECRET_KEY are set to "
+            "default placeholder values. Generate real secrets with:\n"
+            "  python -c \"import secrets; print(secrets.token_hex(32))\"\n"
+            "and set them in your .env file before deploying to production."
+        )
+        if not settings.DEBUG:
+            print(msg, file=sys.stderr)
+            raise RuntimeError(
+                "Refusing to start in production with default secret keys. "
+                "Set SECRET_KEY and JWT_SECRET_KEY in your .env file."
+            )
+        print(msg, file=sys.stderr)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: init DB and seed
+    _validate_secrets()
     await init_db()
     try:
         from app.data.seed_data import seed
         await seed()
     except Exception as e:
-        print(f"Seed warning: {e}")
+        print(f"Seed warning: {e}", file=sys.stderr)
     yield
-    # Shutdown: nothing needed for SQLite
 
 
 app = FastAPI(
@@ -28,7 +49,15 @@ app = FastAPI(
     description="Comprehensive mathematics solver, explainer, and knowledge base API",
     version="1.0.0",
     lifespan=lifespan,
+    # Hide API docs in production
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
 )
+
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,7 +86,6 @@ async def root():
         "app": settings.APP_NAME,
         "version": "1.0.0",
         "status": "running",
-        "docs": "/docs",
     }
 
 
@@ -67,15 +95,27 @@ async def health():
 
 
 @app.get("/api/llm-status", tags=["Health"])
-async def llm_status():
-    """Test LLM connectivity and diagnose Gemini API key issues."""
-    import httpx, asyncio
-    from app.core.config import settings
+async def llm_status(request: Request):
+    """Diagnose LLM connectivity. Requires authentication in production."""
+    from app.core.auth import get_current_user
+    from app.core.database import get_db
+    from fastapi.security import HTTPBearer
+
+    # In production, only authenticated users can see this (key prefix is exposed)
+    if not settings.DEBUG:
+        bearer = HTTPBearer(auto_error=False)
+        from fastapi import HTTPException
+        credentials = await bearer(request)
+        if not credentials:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+    import httpx
+    from app.core.config import settings as s
     from app.services.llm_service import _key_looks_real
 
-    provider = settings.LLM_PROVIDER
-    gemini_key = settings.GEMINI_API_KEY
-    gemini_model = settings.GEMINI_MODEL
+    provider = s.LLM_PROVIDER
+    gemini_key = s.GEMINI_API_KEY
+    gemini_model = s.GEMINI_MODEL
     key_ok = _key_looks_real(gemini_key)
 
     result: dict = {
@@ -96,13 +136,11 @@ async def llm_status():
     }
     models_quick = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
 
-    # ── Phase 1: REST API with full error body capture ─────────────────────────
     async with httpx.AsyncClient(timeout=20) as client:
-        # 1a. List models (diagnostic only)
         for api_ver in ["v1beta", "v1"]:
             for auth_header, auth_label in [
                 ({"x-goog-api-key": gemini_key}, "api-key-header"),
-                ({}, f"?key=... (query param)"),
+                ({}, "query-param"),
             ]:
                 list_url = f"https://generativelanguage.googleapis.com/{api_ver}/models"
                 params = {} if auth_header else {"key": gemini_key}
