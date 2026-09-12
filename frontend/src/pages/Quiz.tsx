@@ -11,6 +11,8 @@ export default function Quiz() {
   const [topic, setTopic] = useState('algebra')
   const [difficulty, setDifficulty] = useState('intermediate')
   const [count, setCount] = useState(5)
+  const [quizId, setQuizId] = useState('')
+  const [error, setError] = useState('')
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
   const [answers, setAnswers] = useState<string[]>([])
   const [result, setResult] = useState<null | { score: number; grade: string; graded_questions: { question: string; user_answer: string; correct_answer: string; explanation: string; is_correct: boolean }[] }>(null)
@@ -19,11 +21,16 @@ export default function Quiz() {
 
   const startQuiz = async () => {
     setLoading(true)
+    setError('')
     setResult(null)
     setAnswers([])
     try {
       const data = await generateQuiz(topic, difficulty, count)
       setQuestions(data.questions)
+      setQuizId(data.quiz_id)
+      setAnswers(Array(data.questions.length).fill(''))
+    } catch {
+      setError('We could not prepare your quiz. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -43,9 +50,12 @@ export default function Quiz() {
       return
     }
     setSubmitting(true)
+    setError('')
     try {
-      const data = await submitQuiz(topic, difficulty, questions, answers)
+      const data = await submitQuiz(quizId, answers)
       setResult(data)
+    } catch {
+      setError('We could not submit your answers. Please retry, or start a new quiz if this one has expired.')
     } finally {
       setSubmitting(false)
     }
@@ -66,6 +76,7 @@ export default function Quiz() {
       </div>
 
       {/* Setup */}
+      {error && <p role="alert" className="mb-4 rounded-xl border border-red-400/30 p-4 text-red-300">{error}</p>}
       {!questions.length && !loading && (
         <div className="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-6">
           <h2 className="font-semibold text-white mb-5">Configure Quiz</h2>
@@ -159,6 +170,8 @@ export default function Quiz() {
             {submitting ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
             Submit Quiz
           </button>
+          <button disabled={submitting} onClick={() => { setQuestions([]); setAnswers([]); setQuizId(''); setError('') }}
+            className="text-indigo-300 underline">Start a new quiz</button>
         </div>
       )}
 

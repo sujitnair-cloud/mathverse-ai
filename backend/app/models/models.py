@@ -86,6 +86,17 @@ class QuizAttempt(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class QuizSession(Base):
+    __tablename__ = "quiz_sessions"
+
+    id = Column(String(64), primary_key=True)
+    session_id = Column(String(64), index=True, nullable=False)
+    topic = Column(String(100), nullable=False)
+    difficulty = Column(String(20), nullable=False)
+    questions = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
