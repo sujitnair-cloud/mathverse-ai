@@ -7,13 +7,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete
 from app.core.database import get_db
 from app.models.models import QuizAttempt, QuizSession
-from app.services.llm_service import generate_quiz_questions
+from app.services.llm_service import generate_quiz_questions, _valid_quiz_question
 
 router = APIRouter()
 
 class QuizRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=100)
     difficulty: Literal['basic', 'intermediate', 'advanced'] = 'intermediate'
+    # Independent of `difficulty` (how advanced the topic/formulas are): how
+    # much reasoning a routine application takes at that same level. A
+    # single flattened "difficulty" was collapsing two different things a
+    # learner (or a teacher building an assignment) may want to vary
+    # separately — a routine question and an unfamiliar one at the same
+    # level are not interchangeable.
+    demand: Literal['routine', 'multi_step', 'unfamiliar'] = 'routine'
     count: int = Field(default=5, ge=1, le=20)
     session_id: str = Field(min_length=1, max_length=64)
 
@@ -24,15 +31,11 @@ class QuizSubmission(BaseModel):
 
 @router.post('/quiz/generate')
 async def generate_quiz(req: QuizRequest, db: AsyncSession = Depends(get_db)):
-    questions = await generate_quiz_questions(req.topic, req.difficulty, req.count)
-    if not questions or len(questions) > 20 or any(
-        not isinstance(q, dict) or not isinstance(q.get('question'), str)
-        or not isinstance(q.get('options'), list) or len(q['options']) < 2
-        or any(not isinstance(o, str) or not o.strip() for o in q['options'])
-        or not isinstance(q.get('answer'), str)
-        or q['answer'].strip().upper() not in {o[0].upper() for o in q['options']}
-        for q in questions
-    ):
+    questions = await generate_quiz_questions(req.topic, req.difficulty, req.demand, req.count)
+    # generate_quiz_questions() already validates every question before
+    # returning it — this is a defense-in-depth check at the API boundary,
+    # not the primary line of defense.
+    if not questions or len(questions) > 20 or any(not _valid_quiz_question(q) for q in questions):
         raise HTTPException(status_code=502, detail='Unable to prepare a valid quiz. Please try again.')
     quiz = QuizSession(id=secrets.token_urlsafe(32), session_id=req.session_id,
                        topic=req.topic, difficulty=req.difficulty, questions=questions)

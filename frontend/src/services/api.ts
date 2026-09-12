@@ -88,10 +88,11 @@ export const getTopicCategories = async (): Promise<string[]> => {
 }
 
 // ── Quiz ─────────────────────────────────────────────────────────────────────
-export const generateQuiz = async (topic: string, difficulty: string, count = 5) => {
+export const generateQuiz = async (topic: string, difficulty: string, demand = 'routine', count = 5) => {
   const { data } = await api.post('/quiz/generate', {
     topic,
     difficulty,
+    demand,
     count,
     session_id: getSessionId(),
   })

@@ -6,10 +6,16 @@ import clsx from 'clsx'
 
 const TOPICS = ['algebra', 'calculus', 'statistics', 'geometry', 'trigonometry', 'probability', 'linear-algebra']
 const DIFFICULTIES = ['basic', 'intermediate', 'advanced']
+const DEMANDS: { value: string; label: string; hint: string }[] = [
+  { value: 'routine', label: 'Routine', hint: 'One direct step' },
+  { value: 'multi_step', label: 'Multi-step', hint: 'A short chain of steps' },
+  { value: 'unfamiliar', label: 'Unfamiliar', hint: "Can't pattern-match a template" },
+]
 
 export default function Quiz() {
   const [topic, setTopic] = useState('algebra')
   const [difficulty, setDifficulty] = useState('intermediate')
+  const [demand, setDemand] = useState('routine')
   const [count, setCount] = useState(5)
   const [quizId, setQuizId] = useState('')
   const [error, setError] = useState('')
@@ -25,7 +31,7 @@ export default function Quiz() {
     setResult(null)
     setAnswers([])
     try {
-      const data = await generateQuiz(topic, difficulty, count)
+      const data = await generateQuiz(topic, difficulty, demand, count)
       setQuestions(data.questions)
       setQuizId(data.quiz_id)
       setAnswers(Array(data.questions.length).fill(''))
@@ -107,6 +113,19 @@ export default function Quiz() {
             </div>
 
             <div>
+              <label className="text-slate-400 text-sm mb-2 block">Question demand</label>
+              <div className="flex flex-wrap gap-2">
+                {DEMANDS.map(d => (
+                  <button key={d.value} onClick={() => setDemand(d.value)} title={d.hint}
+                    className={clsx('px-4 py-1.5 rounded-lg text-sm transition-all', demand === d.value ? 'bg-indigo-500/30 border border-indigo-500/50 text-indigo-200' : 'bg-slate-700/50 border border-slate-600 text-slate-400 hover:text-white')}>
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-slate-500 text-xs mt-1.5">{DEMANDS.find(d => d.value === demand)?.hint} — independent of difficulty, this controls how much reasoning each question takes.</p>
+            </div>
+
+            <div>
               <label className="text-slate-400 text-sm mb-2 block">Number of Questions: {count}</label>
               <input type="range" min={3} max={10} value={count} onChange={e => setCount(Number(e.target.value))}
                 className="w-full accent-indigo-500" />
@@ -131,7 +150,7 @@ export default function Quiz() {
       {questions.length > 0 && !result && (
         <div className="space-y-4">
           <div className="flex items-center justify-between mb-4">
-            <p className="text-slate-400 text-sm">{questions.length} questions · {topic} · {difficulty}</p>
+            <p className="text-slate-400 text-sm">{questions.length} questions · {topic} · {difficulty} · {DEMANDS.find(d => d.value === demand)?.label}</p>
             <span className="text-sm text-indigo-300">{answers.filter(Boolean).length}/{questions.length} answered</span>
           </div>
 
