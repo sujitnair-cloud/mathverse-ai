@@ -126,9 +126,39 @@ def is_llm_first_problem(problem: str) -> bool:
     return bool(_WORD_PROBLEM_RE.search(problem)) or any(k in p for k in _EXPERT_KEYWORDS)
 
 
+class UnsafeExpressionError(ValueError):
+    """Raised when input can't be shown safe to hand to SymPy's parser."""
+
+
+_SAFE_EXPR_CHARS = re.compile(r"^[A-Za-z0-9\s+\-*/.,()=<>!%]*$")
+
+
+def reject_unsafe_expression(s: str) -> None:
+    """
+    SymPy's sympify()/parse_expr() parse math input by compiling it to a
+    Python expression and calling eval() on it. They are NOT safe on
+    untrusted input — this is documented by SymPy itself, and was verified
+    directly against this codebase before this check existed:
+      __import__("os").system("...")           ran an arbitrary shell command
+      ().__class__.__base__.__subclasses__()    walked the whole object graph,
+                                                 no __import__ needed
+    Both rely on double-underscore dunder access, and both need characters
+    (quotes, brackets, colons) a real math expression never needs. Reject
+    both categories before the string ever reaches SymPy's parser. Call
+    this on every user-supplied string before parse_expr()/sympify(),
+    even ones that already went through safe_parse() for something else
+    (e.g. the two sides of an equation, split and parsed separately).
+    """
+    if "__" in s:
+        raise UnsafeExpressionError("Expression contains a disallowed pattern.")
+    if not _SAFE_EXPR_CHARS.match(s):
+        raise UnsafeExpressionError("Expression contains disallowed characters.")
+
+
 def safe_parse(expr_str: str) -> Any:
     """Parse a math expression string safely, handling Unicode math symbols."""
     expr_str = normalize_math_input(expr_str.strip())
+    reject_unsafe_expression(expr_str)
     return parse_expr(expr_str, transformations=TRANSFORMATIONS)
 
 
@@ -391,8 +421,11 @@ def _solve_algebra(problem: str, result: Dict) -> Dict:
             # imaginary" unless x is declared real), and virtually every
             # equation a student writes here is over the reals anyway.
             local_ns = {str(s): s for s in symbols("x y z a b c n t", real=True)}
-            lhs = parse_expr(parts[0].strip(), local_dict=local_ns, transformations=TRANSFORMATIONS)
-            rhs = parse_expr(parts[1].strip(), local_dict=local_ns, transformations=TRANSFORMATIONS)
+            lhs_str, rhs_str = parts[0].strip(), parts[1].strip()
+            reject_unsafe_expression(lhs_str)
+            reject_unsafe_expression(rhs_str)
+            lhs = parse_expr(lhs_str, local_dict=local_ns, transformations=TRANSFORMATIONS)
+            rhs = parse_expr(rhs_str, local_dict=local_ns, transformations=TRANSFORMATIONS)
             steps.append({"step": 1, "description": "Identify the equation", "expression": f"{lhs} = {rhs}"})
             steps.append({"step": 2, "description": "Move all terms to one side", "expression": f"{lhs} - ({rhs}) = 0"})
             eq = Eq(lhs, rhs)

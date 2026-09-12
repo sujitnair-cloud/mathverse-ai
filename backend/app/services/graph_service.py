@@ -5,7 +5,7 @@ Returns JSON data for frontend Plotly rendering.
 import numpy as np
 import json
 from typing import List, Optional, Dict, Any
-from app.services.math_engine import generate_function_points
+from app.services.math_engine import generate_function_points, safe_parse
 
 
 def build_function_graph(
@@ -121,7 +121,11 @@ def build_3d_surface(expr_str: str, x_range: tuple = (-5, 5), y_range: tuple = (
     import sympy as sp
     x_sym, y_sym = sp.symbols("x y")
     try:
-        expr = sp.sympify(expr_str.replace("^", "**"))
+        # safe_parse (not sp.sympify directly) — sympify() evaluates via
+        # Python's eval() with no input validation, so a raw sympify() call
+        # on a user-supplied string is a remote-code-execution hole. This
+        # also picks up |x|, log_3(x), and Unicode notation for free.
+        expr = safe_parse(expr_str)
         f = sp.lambdify((x_sym, y_sym), expr, modules=["numpy"])
         x_vals = np.linspace(x_range[0], x_range[1], grid)
         y_vals = np.linspace(y_range[0], y_range[1], grid)

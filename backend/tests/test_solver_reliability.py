@@ -9,7 +9,62 @@ import unittest
 
 from app.services.math_engine import (
     solve_expression, generate_function_points, is_llm_first_problem, looks_like_prose,
+    safe_parse, UnsafeExpressionError,
 )
+from app.services.graph_service import build_3d_surface, build_function_graph
+
+
+class SecurityTests(unittest.TestCase):
+    """
+    SymPy's sympify()/parse_expr() compile input to a Python expression and
+    eval() it — verified directly (before this fix existed) that this let
+    arbitrary code run through /api/v1/solve, /api/v1/graph, and
+    /api/v1/graph/3d, all reachable without authentication:
+      __import__("os").system(...)              -> ran an arbitrary shell command
+      ().__class__.__base__.__subclasses__()     -> walked the whole object graph
+    These are the two known escape shapes; both require "__". If this test
+    ever starts failing because the payload didn't raise, treat it as a
+    live remote-code-execution regression, not a flaky test.
+    """
+    PAYLOADS = [
+        '__import__("os").system("echo pwned")',
+        '().__class__.__base__.__subclasses__()',
+        'open("whatever").read()',
+        '[x for x in ().__class__.__base__.__subclasses__()]',
+    ]
+
+    def test_safe_parse_rejects_known_rce_payloads(self):
+        for payload in self.PAYLOADS:
+            with self.subTest(payload=payload):
+                with self.assertRaises(UnsafeExpressionError):
+                    safe_parse(payload)
+
+    def test_solve_rejects_payloads_without_raising(self):
+        # The public endpoint must never propagate a raw exception either —
+        # solve_expression() catches internally and reports a clean error.
+        for payload in self.PAYLOADS:
+            with self.subTest(payload=payload):
+                r = solve_expression(payload)
+                self.assertIsNone(r["answer"])
+                self.assertIsNotNone(r["error"])
+
+    def test_3d_graph_rejects_payloads(self):
+        for payload in self.PAYLOADS:
+            with self.subTest(payload=payload):
+                r = build_3d_surface(payload)
+                self.assertIn("error", r)
+
+    def test_2d_graph_rejects_payloads(self):
+        for payload in self.PAYLOADS:
+            with self.subTest(payload=payload):
+                r = build_function_graph([payload])
+                self.assertEqual(r["data"], [])
+                self.assertEqual(len(r["errors"]), 1)
+
+    def test_legitimate_expressions_still_parse(self):
+        for expr in ["x**2 + 3*x - 1", "sin(x) + log(x)", "|x - 2|", "log_3(x)"]:
+            with self.subTest(expr=expr):
+                safe_parse(expr)  # must not raise
 
 
 class InverseTrigTests(unittest.TestCase):
