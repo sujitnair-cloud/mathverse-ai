@@ -1,16 +1,30 @@
 """
-Stripe payments routes.
-POST /api/v1/payments/create-checkout  — create Stripe Checkout session
-POST /api/v1/payments/webhook          — handle Stripe webhook events
-GET  /api/v1/payments/portal           — customer billing portal URL
-GET  /api/v1/payments/status           — current user subscription info
-GET  /api/v1/payments/config           — publishable key for frontend
+Cashfree Subscriptions payments routes.
+
+Flow:
+  1. POST /create-order  → backend creates Cashfree subscription → returns auth_link
+  2. Frontend redirects user to auth_link (Cashfree hosted page)
+  3. User enters card/UPI, authorises ₹1 hold (free trial starts, no real charge)
+  4. Cashfree redirects to success_url; webhook fires → plan activated
+  5. After TRIAL_DAYS, Cashfree charges first real payment automatically
+
+Cashfree Subscriptions API v2:
+  Test base: https://test.cashfree.com/api/v2
+  Prod base: https://api.cashfree.com/api/v2
+  Auth headers: x-client-id, x-client-secret
 """
-import stripe
-from fastapi import APIRouter, HTTPException, Depends, Request, Header
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+import base64
+import hashlib
+import hmac
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+
+import httpx
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.config import settings
@@ -20,29 +34,62 @@ from app.models.models import User
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 
-PLAN_PRICES = {
-    "student": settings.STRIPE_STUDENT_PRICE_ID,
-    "pro":     settings.STRIPE_PRO_PRICE_ID,
+PLAN_IDS = {
+    "student": settings.CASHFREE_STUDENT_PLAN_ID,
+    "pro":     settings.CASHFREE_PRO_PLAN_ID,
 }
 
 PLAN_LIMITS = {
-    "free":    10,   # solves per day
+    "free":    10,
     "student": 9999,
     "pro":     9999,
     "school":  9999,
 }
 
+TRIAL_DAYS = 2
 
-def _stripe_client():
-    if not settings.STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payments not configured yet")
-    stripe.api_key = settings.STRIPE_SECRET_KEY
-    return stripe
 
+# ── Cashfree helpers ──────────────────────────────────────────────────────────
+
+def _cf_base() -> str:
+    if settings.CASHFREE_ENV == "production":
+        return "https://api.cashfree.com/api/v2"
+    return "https://test.cashfree.com/api/v2"
+
+
+def _cf_headers() -> dict:
+    if not settings.CASHFREE_APP_ID or not settings.CASHFREE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payments not configured yet. Set CASHFREE_APP_ID and CASHFREE_SECRET_KEY.")
+    return {
+        "x-client-id": settings.CASHFREE_APP_ID,
+        "x-client-secret": settings.CASHFREE_SECRET_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def _verify_webhook_signature(payload: bytes, timestamp: str, signature: str) -> bool:
+    """
+    Cashfree webhook signature verification.
+    Signature = base64( HMAC-SHA256( timestamp + rawBody, secret_key ) )
+    Caller must ensure CASHFREE_WEBHOOK_SECRET is configured before calling this.
+    """
+    body_str = timestamp + payload.decode("utf-8")
+    computed = base64.b64encode(
+        hmac.new(
+            settings.CASHFREE_WEBHOOK_SECRET.encode(),
+            body_str.encode(),
+            hashlib.sha256,
+        ).digest()
+    ).decode()
+    return hmac.compare_digest(computed, signature)
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/config")
 async def get_config():
-    return {"publishable_key": settings.STRIPE_PUBLISHABLE_KEY or ""}
+    return {"env": settings.CASHFREE_ENV or "test"}
 
 
 @router.get("/status")
@@ -56,108 +103,164 @@ async def get_status(current_user: User = Depends(require_user)):
     }
 
 
-class CheckoutRequest(BaseModel):
-    plan: str          # "student" | "pro"
+class OrderRequest(BaseModel):
+    plan: str         # "student" | "pro"
     success_url: str
     cancel_url: str
 
 
-@router.post("/create-checkout")
-async def create_checkout(
-    body: CheckoutRequest,
+@router.post("/create-order")
+async def create_order(
+    body: OrderRequest,
     current_user: User = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
-    _stripe = _stripe_client()
-    price_id = PLAN_PRICES.get(body.plan)
-    if not price_id:
+    plan_id = PLAN_IDS.get(body.plan)
+    if not plan_id:
         raise HTTPException(status_code=400, detail=f"Unknown plan: {body.plan}")
 
-    # Get or create Stripe customer
-    customer_id = current_user.stripe_customer_id
-    if not customer_id:
-        customer = _stripe.Customer.create(
-            email=current_user.email,
-            name=current_user.name,
-            metadata={"user_id": str(current_user.id)},
+    now = datetime.now(timezone.utc)
+    first_charge_date = (now + timedelta(days=TRIAL_DAYS)).strftime("%Y-%m-%d")
+    expires_on = (now + timedelta(days=3650)).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Unique subscription ID tied to this user + timestamp
+    sub_id = f"mvsub_{current_user.id}_{int(now.timestamp())}"
+
+    # Cashfree requires a phone number; we use a placeholder since Google login
+    # doesn't provide one. The Cashfree checkout page lets the user enter their own.
+    customer_phone = "9999999999"
+
+    payload = {
+        "subscriptionId": sub_id,
+        "planId": plan_id,
+        "customerName": (current_user.name or current_user.email.split("@")[0])[:50],
+        "customerEmail": current_user.email,
+        "customerPhone": customer_phone,
+        "returnUrl": body.success_url,
+        "authAmount": 1,              # ₹1 authorisation — verifies card, not charged
+        "firstChargeDate": first_charge_date,
+        "expiresOn": expires_on,
+        "subscriptionNote": f"MathVerse {body.plan.title()} – {TRIAL_DAYS}-day free trial",
+        "subscriptionMeta": {
+            "user_id": str(current_user.id),
+            "plan": body.plan,
+        },
+    }
+
+    print(f"[MathVerse] Cashfree create-order: {sub_id} plan={body.plan}", file=sys.stderr)
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_cf_base()}/subscriptions",
+            json=payload,
+            headers=_cf_headers(),
         )
-        customer_id = customer.id
-        current_user.stripe_customer_id = customer_id
-        await db.commit()
 
-    session = _stripe.checkout.Session.create(
-        customer=customer_id,
-        payment_method_types=["card"],
-        line_items=[{"price": price_id, "quantity": 1}],
-        mode="subscription",
-        success_url=body.success_url + "?session_id={CHECKOUT_SESSION_ID}",
-        cancel_url=body.cancel_url,
-        metadata={"user_id": str(current_user.id), "plan": body.plan},
-        allow_promotion_codes=True,
-    )
-    return {"checkout_url": session.url}
+    print(f"[MathVerse] Cashfree response {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
+
+    if resp.status_code not in (200, 201):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Cashfree error ({resp.status_code}): {resp.text[:200]}"
+        )
+
+    data = resp.json()
+    auth_link = data.get("authLink") or data.get("shortUrl")
+    if not auth_link:
+        raise HTTPException(status_code=502, detail=f"No auth link from Cashfree: {data}")
+
+    # Persist subscription ID so webhook can find this user
+    current_user.payment_subscription_id = sub_id
+    await db.commit()
+
+    return {"checkout_url": auth_link, "plan": body.plan}
 
 
-@router.get("/portal")
-async def billing_portal(
-    return_url: str,
+@router.post("/cancel")
+async def cancel_subscription(
     current_user: User = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    _stripe = _stripe_client()
-    if not current_user.stripe_customer_id:
-        raise HTTPException(status_code=400, detail="No billing account found")
-    session = _stripe.billing_portal.Session.create(
-        customer=current_user.stripe_customer_id,
-        return_url=return_url,
-    )
-    return {"portal_url": session.url}
+    sub_id = current_user.payment_subscription_id
+    if not sub_id:
+        raise HTTPException(status_code=400, detail="No active subscription found")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_cf_base()}/subscriptions/{sub_id}/cancel",
+            headers=_cf_headers(),
+        )
+
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=400, detail=f"Cancel failed: {resp.text[:200]}")
+
+    current_user.subscription_status = "canceled"
+    await db.commit()
+    return {"success": True, "message": "Subscription cancelled at end of current period"}
 
 
 @router.post("/webhook")
-async def stripe_webhook(
+async def cashfree_webhook(
     request: Request,
-    stripe_signature: Optional[str] = Header(None),
+    x_webhook_signature: Optional[str] = Header(None),
+    x_webhook_timestamp: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db),
 ):
-    _stripe = _stripe_client()
     payload = await request.body()
 
-    try:
-        event = _stripe.Webhook.construct_event(
-            payload, stripe_signature, settings.STRIPE_WEBHOOK_SECRET
-        )
-    except Exception:
+    # Verify signature. A missing secret or missing/invalid headers must reject
+    # the request — silently accepting an unsigned webhook would let anyone
+    # activate or cancel any user's subscription by guessing a subscription id.
+    if not settings.CASHFREE_WEBHOOK_SECRET:
+        if settings.DEBUG:
+            print("[MathVerse] WARNING: CASHFREE_WEBHOOK_SECRET not set — accepting unsigned webhook (debug only)", file=sys.stderr)
+        else:
+            raise HTTPException(status_code=503, detail="Webhook verification not configured")
+    elif not x_webhook_signature or not x_webhook_timestamp:
+        raise HTTPException(status_code=400, detail="Missing webhook signature")
+    elif not _verify_webhook_signature(payload, x_webhook_timestamp, x_webhook_signature):
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
-    data = event["data"]["object"]
+    event = json.loads(payload)
+    event_type = event.get("type", "")
 
-    if event["type"] == "checkout.session.completed":
-        user_id = int(data.get("metadata", {}).get("user_id", 0))
-        plan = data.get("metadata", {}).get("plan", "student")
-        if user_id:
-            result = await db.execute(select(User).where(User.id == user_id))
-            user = result.scalar_one_or_none()
-            if user:
-                user.subscription_plan = plan
-                user.subscription_status = "active"
-                user.stripe_subscription_id = data.get("subscription")
-                await db.commit()
+    # Cashfree sends subscription data in different structures depending on event type
+    data = event.get("data", event)
+    sub_obj = data.get("subscription", data)
+    sub_id = sub_obj.get("subscriptionId") or sub_obj.get("cf_subscription_id") or ""
+    meta = sub_obj.get("subscriptionMeta", sub_obj.get("subscriptionTags", {})) or {}
+    plan_name = meta.get("plan", "student")
 
-    elif event["type"] in ("customer.subscription.deleted", "customer.subscription.paused"):
-        sub_id = data.get("id")
-        result = await db.execute(select(User).where(User.stripe_subscription_id == sub_id))
-        user = result.scalar_one_or_none()
-        if user:
-            user.subscription_plan = "free"
-            user.subscription_status = "canceled"
+    print(f"[MathVerse] Cashfree webhook: {event_type} sub={sub_id}", file=sys.stderr)
+
+    if not sub_id:
+        return {"received": True}
+
+    result = await db.execute(select(User).where(User.payment_subscription_id == sub_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        return {"received": True}
+
+    # Activate plan
+    if event_type in (
+        "SUBSCRIPTION_ACTIVATED",
+        "SUBSCRIPTION_NEW_PLAN",
+        "SUBSCRIPTION_PAYMENT_SUCCESS",
+        "SUBSCRIPTION_STATUS_CHANGE",
+        "PAYMENT_SUCCESS",
+    ):
+        # Double-check status field if present
+        status = sub_obj.get("status", "ACTIVE").upper()
+        if status in ("ACTIVE", "PAID", "SUCCESS", "AUTHORIZED"):
+            user.subscription_plan = plan_name
+            user.subscription_status = "active"
             await db.commit()
+            print(f"[MathVerse] Activated plan={plan_name} for user={user.id}", file=sys.stderr)
 
-    elif event["type"] == "customer.subscription.updated":
-        sub_id = data.get("id")
-        result = await db.execute(select(User).where(User.stripe_subscription_id == sub_id))
-        user = result.scalar_one_or_none()
-        if user:
-            user.subscription_status = data.get("status", "active")
-            await db.commit()
+    elif event_type in ("SUBSCRIPTION_CANCELLED", "SUBSCRIPTION_EXPIRED", "SUBSCRIPTION_PAYMENT_FAILED"):
+        user.subscription_plan = "free"
+        user.subscription_status = "canceled"
+        await db.commit()
+        print(f"[MathVerse] Cancelled subscription for user={user.id}", file=sys.stderr)
 
     return {"received": True}

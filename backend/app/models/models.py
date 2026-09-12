@@ -13,9 +13,9 @@ class User(Base):
     avatar_url = Column(Text)
     is_active = Column(Boolean, default=True)
 
-    # Stripe subscription
-    stripe_customer_id = Column(String(128), unique=True, index=True)
-    stripe_subscription_id = Column(String(128))
+    # Payment subscription (Cashfree)
+    payment_customer_id = Column(String(128), unique=True, index=True)
+    payment_subscription_id = Column(String(128))
     subscription_plan = Column(String(20), default="free")   # free | student | pro | school
     subscription_status = Column(String(20), default="active")  # active | canceled | past_due
     subscription_expires_at = Column(DateTime(timezone=True))
