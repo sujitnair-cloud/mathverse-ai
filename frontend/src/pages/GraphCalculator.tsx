@@ -58,6 +58,9 @@ export default function GraphCalculator() {
         graphData = await plotFunctions(exprs, xMin, xMax, title)
       }
       if (graphData.error) { setError(graphData.error); return }
+      if (graphData.errors?.length) {
+        setError(graphData.errors.map((e: { expression: string; error: string }) => `"${e.expression}": ${e.error}`).join(' · '))
+      }
       window.Plotly.newPlot(plotRef.current, graphData.data, graphData.layout, { responsive: true })
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to plot. Is the backend running?')
@@ -202,7 +205,7 @@ export default function GraphCalculator() {
             )}
           </div>
           <p className="text-slate-600 text-xs mt-2 text-center">
-            Use Python/NumPy syntax: x**2, sin(x), exp(x), log(x), sqrt(x), pi
+            x^2 or x**2, sin(x), exp(x), sqrt(x), pi, |x|, log_3(x) for log base 3
           </p>
         </div>
       </div>

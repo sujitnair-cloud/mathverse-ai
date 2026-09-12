@@ -16,11 +16,16 @@ def build_function_graph(
 ) -> Dict[str, Any]:
     """Build Plotly-compatible JSON for one or more mathematical functions."""
     traces = []
+    errors = []
     colors = ["#6366f1", "#ec4899", "#10b981", "#f59e0b", "#3b82f6"]
 
     for i, expr in enumerate(expressions):
         data = generate_function_points(expr, x_min, x_max)
         if "error" in data:
+            # Surface the failure instead of silently dropping the curve —
+            # a blank graph with no explanation is exactly what makes users
+            # think they need to know programming syntax to plot anything.
+            errors.append({"expression": expr, "error": data["error"]})
             continue
         traces.append({
             "type": "scatter",
@@ -54,7 +59,7 @@ def build_function_graph(
         "margin": {"l": 50, "r": 30, "t": 50, "b": 50},
     }
 
-    return {"data": traces, "layout": layout}
+    return {"data": traces, "layout": layout, "errors": errors}
 
 
 def build_bar_chart(labels: List[str], values: List[float], title: str = "Bar Chart") -> Dict:

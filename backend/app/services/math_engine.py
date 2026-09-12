@@ -41,10 +41,22 @@ UNICODE_MAP = [
 
 
 def normalize_math_input(s: str) -> str:
-    """Convert Unicode math symbols to ASCII equivalents SymPy can parse."""
+    """
+    Convert common mathematical notation that SymPy's parser can't read
+    directly into an equivalent form it can, so students don't have to write
+    programming syntax. Shared by both the solver and the grapher.
+    """
     for uni, asc in UNICODE_MAP:
         s = s.replace(uni, asc)
     s = s.replace("^", "**")
+    # |expr| -> Abs(expr). Handles sequential (non-nested) pairs, e.g.
+    # "|x| + |x-2|" -> "Abs(x) + Abs(x-2)".
+    s = re.sub(r"\|([^|]+)\|", r"Abs(\1)", s)
+    # log_3(x) / log_b(x) subscript-base notation -> log(x, 3) / log(x, b),
+    # which is how SymPy spells "log base 3 of x". Only handles a
+    # non-nested argument (no inner parentheses), which covers the common
+    # single-expression case.
+    s = re.sub(r"log_(\w+)\(([^()]*)\)", r"log(\2, \1)", s)
     return s
 
 
@@ -102,15 +114,119 @@ _WORD_PROBLEM_RE = re.compile(
 def is_llm_first_problem(problem: str) -> bool:
     """
     Return True when the problem should bypass SymPy and go straight to the LLM.
-    Catches word problems, proofs, applied/aptitude problems, and exam-style questions.
+    Catches word problems, proofs, applied/aptitude problems, exam-style questions,
+    and graduate-level analysis requests (Fourier/Laplace transforms, PDEs, etc.)
+    that the per-topic SymPy solvers below have no dedicated handler for — sending
+    those through the generic algebra fallback produces fabricated nonsense instead
+    of an error (e.g. "Fourier transform of e^(-t^2)" silently multiplying the
+    individual letters of "Fourier" and "transform" together as if they were
+    single-letter variables).
     """
-    return bool(_WORD_PROBLEM_RE.search(problem))
+    p = problem.lower()
+    return bool(_WORD_PROBLEM_RE.search(problem)) or any(k in p for k in _EXPERT_KEYWORDS)
 
 
 def safe_parse(expr_str: str) -> Any:
     """Parse a math expression string safely, handling Unicode math symbols."""
     expr_str = normalize_math_input(expr_str.strip())
     return parse_expr(expr_str, transformations=TRANSFORMATIONS)
+
+
+_KNOWN_MATH_WORDS = {
+    "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+    "log", "ln", "exp", "sqrt", "abs", "pi", "oo", "min", "max", "gcd",
+    "lcm", "mod", "and", "or", "not",
+}
+
+# Connector words that are never legitimate variable names but are short
+# enough to slip under the length-3 prose check below (e.g. "50% of 200"
+# parsing "of" as the implicitly-multiplied variables o*f, alongside "%"
+# being read as modulo, to produce "200*f*(Mod(50, o))").
+_PROSE_MARKER_WORDS = {"of", "is", "to", "in", "on", "an", "as", "for", "with", "at"}
+
+
+def looks_like_prose(s: str) -> bool:
+    """
+    True when a string still contains English-word-like runs after removing
+    recognized math function names — a sign this is natural language rather
+    than a parseable expression (e.g. "Fourier transform of e^(-t^2)" — SymPy's
+    implicit-multiplication parser will happily accept "Fourier" as F*o*u*r*i*e*r
+    and silently return a fabricated answer instead of failing).
+    Single- and double-letter tokens are allowed through since those are how
+    students actually write variables (x, dx, ab for a*b, etc.), except for a
+    short list of connector words that are never legitimate variable names.
+    """
+    for tok in re.findall(r"[a-zA-Z]+", s):
+        low = tok.lower()
+        if low in _KNOWN_MATH_WORDS:
+            continue
+        if low in _PROSE_MARKER_WORDS or len(tok) >= 3:
+            return True
+    return False
+
+
+def _strip_wrapping_parens(s: str) -> str:
+    """
+    Remove a single pair of parentheses that wraps the *entire* string, e.g.
+    "(x^2 + 1)" -> "x^2 + 1". Unlike `str.strip("()")`, this only strips when
+    the leading "(" actually matches the trailing ")" as one pair — plain
+    `.strip("()")` also mangles "sin(x)" into "sin(x" (it blindly trims any
+    "(" / ")" characters off each end) and turns "(x+1)*(x-1)" into the
+    unbalanced "x+1)*(x-1", both previously causing parse errors on
+    otherwise-valid input.
+    """
+    s = s.strip()
+    while s.startswith("(") and s.endswith(")"):
+        depth = 0
+        matches_at_end = False
+        for i, ch in enumerate(s):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    matches_at_end = (i == len(s) - 1)
+                    break
+        if not matches_at_end:
+            break
+        s = s[1:-1].strip()
+    return s
+
+
+_PROSE_ERROR = (
+    "This doesn't look like a solvable expression or equation — it may need a "
+    "full worked derivation (proofs, transforms, and similar advanced requests "
+    "aren't handled by the structured solver). Try our AI-powered full solver, "
+    "or rephrase this as a direct expression or equation, e.g. 'x^2 + 3x = 10'."
+)
+
+
+def _infer_variable(expr: Any, problem: str, default_name: str = "x") -> Any:
+    """
+    Pick the variable to differentiate/integrate/take a limit with respect to.
+    Prefers an explicit "with respect to <var>" or "d/d<var>" in the problem
+    text; otherwise uses the expression's own free variable when there's
+    exactly one (fixes e.g. "differentiate t^2 + 3t" silently returning 0
+    because the code always differentiated with respect to x regardless of
+    what variable the expression actually used); falls back to `default_name`
+    for constant or genuinely multivariable expressions, matching prior
+    behavior.
+    """
+    m = re.search(r"with\s+respect\s+to\s+([a-zA-Z])\b", problem, re.IGNORECASE)
+    if not m:
+        m = re.search(r"\bd\s*/\s*d([a-zA-Z])\b", problem, re.IGNORECASE)
+    if not m:
+        # Leibniz integral notation: "... x^2 dx" / "... t^2 dt"
+        m = re.search(r"\bd([a-zA-Z])\s*$", problem.strip(), re.IGNORECASE)
+    if m:
+        return symbols(m.group(1))
+    default = symbols(default_name)
+    free = expr.free_symbols if hasattr(expr, "free_symbols") else set()
+    if default in free or not free:
+        return default
+    if len(free) == 1:
+        return next(iter(free))
+    return default
 
 
 def detect_topic(problem: str) -> str:
@@ -259,19 +375,35 @@ def _solve_algebra(problem: str, result: Dict) -> Dict:
             p = p[len(prefix):].strip()
             break
 
+    if looks_like_prose(p):
+        result["error"] = _PROSE_ERROR
+        result["answer"] = None
+        return result
+
     # Check if it's an equation (contains =)
     if "=" in p:
         parts = p.split("=")
         if len(parts) == 2:
-            # Pre-define common variables so implicit multiplication works correctly
-            local_ns = {str(s): s for s in symbols("x y z a b c n t")}
+            # Pre-define common variables as real so implicit multiplication
+            # works correctly and so SymPy can solve equations involving
+            # Abs()/sqrt() — solve() refuses those for a plain complex-domain
+            # symbol (e.g. "|x - 5| = 3" errors with "argument is not real or
+            # imaginary" unless x is declared real), and virtually every
+            # equation a student writes here is over the reals anyway.
+            local_ns = {str(s): s for s in symbols("x y z a b c n t", real=True)}
             lhs = parse_expr(parts[0].strip(), local_dict=local_ns, transformations=TRANSFORMATIONS)
             rhs = parse_expr(parts[1].strip(), local_dict=local_ns, transformations=TRANSFORMATIONS)
             steps.append({"step": 1, "description": "Identify the equation", "expression": f"{lhs} = {rhs}"})
             steps.append({"step": 2, "description": "Move all terms to one side", "expression": f"{lhs} - ({rhs}) = 0"})
             eq = Eq(lhs, rhs)
             free = eq.free_symbols
-            var = sorted(free, key=lambda s: str(s))[0] if free else symbols("x")
+            x = symbols("x", real=True)
+            if x in free:
+                var = x
+            elif free:
+                var = sorted(free, key=lambda s: str(s))[0]
+            else:
+                var = x
             solution = solve(eq, var)
             steps.append({"step": 3, "description": f"Solve for {var}", "expression": f"{var} = {solution}"})
             result["answer"] = str(solution)
@@ -313,10 +445,15 @@ def _solve_differentiation(problem: str, result: Dict) -> Dict:
         if idx != -1:
             p = p[idx + len(keyword):].strip()
             break
-    p = p.strip("()").strip()
+    p = _strip_wrapping_parens(p)
 
-    x = symbols("x")
+    if looks_like_prose(p):
+        result["error"] = _PROSE_ERROR
+        result["answer"] = None
+        return result
+
     expr = safe_parse(p)
+    x = _infer_variable(expr, problem)
     steps.append({"step": 1, "description": "Identify the function to differentiate", "expression": str(expr)})
     steps.append({"step": 2, "description": "Apply differentiation rules (Power, Chain, Product, Quotient)", "expression": ""})
     derivative = diff(expr, x)
@@ -326,7 +463,7 @@ def _solve_differentiation(problem: str, result: Dict) -> Dict:
 
     result["steps"] = steps
     result["answer"] = str(simplified_deriv)
-    result["latex_answer"] = f"\\frac{{d}}{{dx}}\\left({latex(expr)}\\right) = {latex(simplified_deriv)}"
+    result["latex_answer"] = f"\\frac{{d}}{{d{latex(x)}}}\\left({latex(expr)}\\right) = {latex(simplified_deriv)}"
     result["formulas_used"] = ["Power Rule: d/dx(xⁿ) = nxⁿ⁻¹", "Chain Rule", "Product Rule", "Quotient Rule"]
     result["common_mistakes"] = [
         "Forgetting the chain rule for composite functions",
@@ -343,10 +480,15 @@ def _solve_integration(problem: str, result: Dict) -> Dict:
         p = p.replace(keyword, "").strip()
     # Remove dx at end
     p = re.sub(r"\s*d[a-z]\s*$", "", p).strip()
-    p = p.strip("()").strip()
+    p = _strip_wrapping_parens(p)
 
-    x = symbols("x")
+    if looks_like_prose(p):
+        result["error"] = _PROSE_ERROR
+        result["answer"] = None
+        return result
+
     expr = safe_parse(p)
+    x = _infer_variable(expr, problem)
     steps.append({"step": 1, "description": "Identify the integrand", "expression": str(expr)})
     steps.append({"step": 2, "description": "Apply integration rules", "expression": ""})
     integral = integrate(expr, x)
@@ -355,7 +497,7 @@ def _solve_integration(problem: str, result: Dict) -> Dict:
 
     result["steps"] = steps
     result["answer"] = f"{integral} + C"
-    result["latex_answer"] = f"\\int {latex(expr)}\\, dx = {latex(integral)} + C"
+    result["latex_answer"] = f"\\int {latex(expr)}\\, d{latex(x)} = {latex(integral)} + C"
     result["formulas_used"] = ["Power Rule: ∫xⁿ dx = xⁿ⁺¹/(n+1) + C", "Substitution method"]
     result["common_mistakes"] = [
         "Forgetting the constant of integration C",
@@ -367,36 +509,40 @@ def _solve_integration(problem: str, result: Dict) -> Dict:
 def _solve_limit(problem: str, result: Dict) -> Dict:
     steps = []
     p = problem.lower().replace("^", "**")
-    # Try to extract: limit of <expr> as x -> <val>
-    match = re.search(r"(?:limit|lim)\s+(?:of\s+)?(.+?)\s+as\s+x\s*(?:->|→|approaches)\s*([^\s]+)", p)
+    var_str = None
+    # Try to extract: limit of <expr> as <var> -> <val>
+    match = re.search(r"(?:limit|lim)\s+(?:of\s+)?(.+?)\s+as\s+([a-zA-Z])\s*(?:->|→|approaches)\s*([^\s]+)", p)
     if match:
-        expr_str = match.group(1).strip()
-        val_str = match.group(2).strip()
+        expr_str, var_str, val_str = match.group(1).strip(), match.group(2), match.group(3).strip()
     else:
-        # Try simple: lim x->0 of expr
-        match2 = re.search(r"(?:limit|lim)\s*x\s*[-–>→]+\s*([^\s]+)\s+(?:of\s+)?(.+)", p)
+        # Try simple: lim <var>->0 of expr
+        match2 = re.search(r"(?:limit|lim)\s*([a-zA-Z])\s*[-–>→]+\s*([^\s]+)\s+(?:of\s+)?(.+)", p)
         if match2:
-            val_str = match2.group(1).strip()
-            expr_str = match2.group(2).strip()
+            var_str, val_str, expr_str = match2.group(1), match2.group(2).strip(), match2.group(3).strip()
         else:
             expr_str = re.sub(r"(?:limit|lim)[\s\w\->→]*", "", p).strip()
             val_str = "0"
 
-    x = symbols("x")
+    if looks_like_prose(expr_str):
+        result["error"] = _PROSE_ERROR
+        result["answer"] = None
+        return result
+
     expr = safe_parse(expr_str)
+    x = symbols(var_str) if var_str else _infer_variable(expr, problem)
     try:
         val = safe_parse(val_str)
     except Exception:
         val = 0
 
-    steps.append({"step": 1, "description": "Identify the expression and limit point", "expression": f"lim(x→{val}) {expr}"})
+    steps.append({"step": 1, "description": "Identify the expression and limit point", "expression": f"lim({x}→{val}) {expr}"})
     steps.append({"step": 2, "description": "Check for direct substitution", "expression": ""})
     lim_val = limit(expr, x, val)
     steps.append({"step": 3, "description": "Evaluate limit", "expression": str(lim_val)})
 
     result["steps"] = steps
     result["answer"] = str(lim_val)
-    result["latex_answer"] = f"\\lim_{{x \\to {latex(val)}}} {latex(expr)} = {latex(lim_val)}"
+    result["latex_answer"] = f"\\lim_{{{latex(x)} \\to {latex(val)}}} {latex(expr)} = {latex(lim_val)}"
     result["formulas_used"] = ["Direct substitution", "L'Hôpital's rule (if 0/0 or ∞/∞ form)"]
     result["common_mistakes"] = ["Not checking if the limit is indeterminate before substituting"]
     return result
@@ -566,30 +712,81 @@ def _solve_trigonometry(problem: str, result: Dict) -> Dict:
 
     trig_funcs = {"sin": sin, "cos": cos, "tan": tan, "asin": asin, "acos": acos, "atan": atan}
 
-    # Check for direct evaluation like sin(30) or sin(pi/6)
+    # Check for direct evaluation like sin(30) or sin(pi/6).
+    # \b is required: without it, searching for "tan" against "atan(1)" matches
+    # the "tan(1)" substring inside "atan(1)" before the "atan" entry is ever
+    # checked, silently computing tan(1°) instead of atan(1). Since 'a' and 't'
+    # are both word characters, \b correctly refuses to match "tan" there while
+    # still matching a standalone "tan(...)".
     for fname, func in trig_funcs.items():
-        match = re.search(rf"{fname}\s*\(?\s*([^)]+)\s*\)?", p)
+        match = re.search(rf"\b{fname}\s*\(?\s*([^)]+)\s*\)?", p)
         if match:
             arg_str = match.group(1).strip()
             try:
                 x_val = safe_parse(arg_str)
-                # Convert degrees to radians if plain number assumed as degrees
+
+                if fname in ("asin", "acos", "atan"):
+                    # Inverse functions take a dimensionless ratio, not an
+                    # angle — the input must never go through the
+                    # degrees-to-radians conversion below (that conversion
+                    # previously ran unconditionally here too, so e.g.
+                    # atan(1) silently computed atan(1° in radians) instead
+                    # of atan(1)). The result IS an angle, so show it in
+                    # both radians and degrees.
+                    if fname in ("asin", "acos"):
+                        try:
+                            in_domain = -1 <= float(N(x_val)) <= 1
+                        except (TypeError, ValueError):
+                            in_domain = True  # non-numeric (symbolic) input — let SymPy attempt it
+                        if not in_domain:
+                            result["error"] = (
+                                f"{fname}({arg_str}) has no real answer — {fname} is only "
+                                f"defined for inputs between -1 and 1 (you gave {arg_str})."
+                            )
+                            result["answer"] = None
+                            return result
+                    steps.append({"step": 1, "description": f"Evaluate {fname}({arg_str})", "expression": ""})
+                    # nsimplify turns a decimal like 0.5 into Rational(1, 2) first,
+                    # so SymPy can return a clean closed form (pi/3) instead of an
+                    # un-simplified numeric expression when the input was a float.
+                    try:
+                        exact_x = nsimplify(x_val, rational=True)
+                    except Exception:
+                        exact_x = x_val
+                    val = func(exact_x)
+                    simplified = simplify(val)
+                    numeric_rad = float(N(simplified, 6))
+                    numeric_deg = numeric_rad * 180 / float(pi)
+                    steps.append({"step": 2, "description": "Exact value (radians)", "expression": str(simplified)})
+                    steps.append({"step": 3, "description": "Decimal approximation", "expression": f"{numeric_rad:.6f} rad = {numeric_deg:.4f}°"})
+                    result["answer"] = f"Exact: {simplified} rad, Decimal: {numeric_rad:.6f} rad ({numeric_deg:.4f}°)"
+                    result["latex_answer"] = f"{fname}\\left({latex(x_val)}\\right) = {latex(simplified)} \\approx {numeric_rad:.6f}\\text{{ rad}}"
+                    result["steps"] = steps
+                    result["formulas_used"] = [f"Inverse trigonometric identity for {fname}"]
+                    result["common_mistakes"] = [
+                        "The result is an angle, not a ratio",
+                        "Forgetting the restricted range of inverse trig functions",
+                    ]
+                    return result
+
+                # sin/cos/tan take an angle: assume degrees for a bare number
+                # (e.g. sin(30)); treat anything else as already in radians
+                # (e.g. sin(pi/6)).
                 if re.match(r"^\d+\.?\d*$", arg_str):
                     x_rad = x_val * pi / 180
                     steps.append({"step": 1, "description": f"Convert {arg_str}° to radians", "expression": f"{arg_str}° = {latex(x_rad)}"})
-                    val = func(x_rad)
                 else:
                     x_rad = x_val
                     steps.append({"step": 1, "description": f"Evaluate {fname}({arg_str})", "expression": ""})
-                    val = func(x_rad)
+                val = func(x_rad)
                 simplified = simplify(val)
                 numeric = float(N(simplified, 6))
-                steps.append({"step": 2, "description": f"Exact value", "expression": str(simplified)})
+                steps.append({"step": 2, "description": "Exact value", "expression": str(simplified)})
                 steps.append({"step": 3, "description": "Decimal approximation", "expression": str(numeric)})
                 result["answer"] = f"Exact: {simplified}, Decimal: {numeric:.6f}"
                 result["latex_answer"] = f"{fname}\\left({latex(x_rad)}\\right) = {latex(simplified)} \\approx {numeric:.6f}"
                 result["steps"] = steps
-                result["formulas_used"] = [f"Unit circle values", f"Trigonometric identity for {fname}"]
+                result["formulas_used"] = ["Unit circle values", f"Trigonometric identity for {fname}"]
                 result["common_mistakes"] = ["Using degrees when radians are expected", "Mixing sin/cos identities"]
                 return result
             except Exception:
