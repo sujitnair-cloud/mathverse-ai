@@ -8,15 +8,19 @@ export default function History() {
   const [items, setItems] = useState<HistoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [clearing, setClearing] = useState(false)
+  const [error, setError] = useState('')
   const navigate = useNavigate()
 
   useEffect(() => { load() }, [])
 
   const load = async () => {
     setLoading(true)
+    setError('')
     try {
       const data = await getHistory()
       setItems(data.history)
+    } catch {
+      setError('Your history could not be loaded. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -25,9 +29,15 @@ export default function History() {
   const handleClear = async () => {
     if (!confirm('Clear all history? This cannot be undone.')) return
     setClearing(true)
-    await clearHistory()
-    setItems([])
-    setClearing(false)
+    setError('')
+    try {
+      await clearHistory()
+      setItems([])
+    } catch {
+      setError('Your history could not be cleared. Please try again.')
+    } finally {
+      setClearing(false)
+    }
   }
 
   const formatDate = (s: string) => {
@@ -56,11 +66,12 @@ export default function History() {
         )}
       </div>
 
+      {error && <div role="alert" className="mb-4 text-red-300">{error} <button onClick={load} className="underline">Reload history</button></div>}
       {loading ? (
         <div className="text-center py-12 text-indigo-300">
           <Loader2 size={28} className="animate-spin mx-auto mb-3" />
         </div>
-      ) : items.length === 0 ? (
+      ) : error && items.length === 0 ? null : items.length === 0 ? (
         <div className="text-center py-16">
           <AlertCircle size={40} className="text-slate-600 mx-auto mb-4" />
           <p className="text-slate-500">No history yet.</p>
@@ -73,10 +84,10 @@ export default function History() {
         <div className="space-y-3">
           <p className="text-slate-500 text-sm">{items.length} problems solved</p>
           {items.map(item => (
-            <div
+            <button
               key={item.id}
               onClick={() => navigate(`/solver?q=${encodeURIComponent(item.problem)}`)}
-              className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-4 hover:border-indigo-500/40 hover:bg-slate-800 transition-all cursor-pointer group flex items-start justify-between gap-3"
+              className="w-full text-left bg-slate-800/60 border border-slate-700/50 rounded-xl p-4 hover:border-indigo-500/40 hover:bg-slate-800 transition-all cursor-pointer group flex items-start justify-between gap-3"
             >
               <div className="min-w-0">
                 <p className="text-white font-medium text-sm mb-1 group-hover:text-indigo-300 transition-colors truncate">
@@ -93,7 +104,7 @@ export default function History() {
                 )}
               </div>
               <ArrowRight size={16} className="text-slate-600 group-hover:text-indigo-400 flex-shrink-0 transition-colors mt-0.5" />
-            </div>
+            </button>
           ))}
         </div>
       )}

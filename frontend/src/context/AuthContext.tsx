@@ -37,7 +37,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!token) return
     axios.get(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => { if (!r.data.authenticated) logout() })
-      .catch(() => logout())
+      .catch(error => {
+        if (axios.isAxiosError(error) && error.response?.status === 401) logout()
+      })
   }, []) // eslint-disable-line
 
   const login = async (googleCredential: string) => {

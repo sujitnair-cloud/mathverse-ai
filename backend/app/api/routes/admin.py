@@ -1,22 +1,34 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.core.database import get_db
-from app.models.models import SolveHistory, QuizAttempt, UserProfile, Formula, MathTopic
+from app.core.auth import require_user
+from app.core.config import settings
+from app.models.models import SolveHistory, QuizAttempt, UserProfile, Formula, MathTopic, User
 
 router = APIRouter()
 
 
+def _admin_emails() -> set:
+    return {e.strip().lower() for e in settings.ADMIN_EMAILS.split(",") if e.strip()}
+
+
 @router.get("/admin/dashboard")
-async def dashboard_stats(db: AsyncSession = Depends(get_db)):
+async def dashboard_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    admins = _admin_emails()
+    if not admins or current_user.email.lower() not in admins:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
     total_solves = (await db.execute(select(func.count()).select_from(SolveHistory))).scalar()
     total_quizzes = (await db.execute(select(func.count()).select_from(QuizAttempt))).scalar()
     total_users = (await db.execute(select(func.count()).select_from(UserProfile))).scalar()
     total_formulas = (await db.execute(select(func.count()).select_from(Formula))).scalar()
     total_topics = (await db.execute(select(func.count()).select_from(MathTopic))).scalar()
 
-    # Recent activity
     recent = await db.execute(
         select(SolveHistory)
         .order_by(SolveHistory.created_at.desc())
@@ -27,7 +39,6 @@ async def dashboard_stats(db: AsyncSession = Depends(get_db)):
         for h in recent.scalars().all()
     ]
 
-    # Top topics
     topic_counts = await db.execute(
         select(SolveHistory.topic, func.count().label("count"))
         .group_by(SolveHistory.topic)
