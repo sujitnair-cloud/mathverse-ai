@@ -5,8 +5,14 @@ from typing import List
 class Settings(BaseSettings):
     APP_NAME: str = "MathVerse AI"
     DEBUG: bool = True
-    FRONTEND_URL: str = "http://localhost:5173"
-    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+    FRONTEND_URL: str = "https://mathverseai.org"
+    ALLOWED_ORIGINS: str = (
+        "https://mathverseai.org,"
+        "https://www.mathverseai.org,"
+        "https://mathverse-ai-bhwn.vercel.app,"
+        "http://localhost:5173,"
+        "http://localhost:3000"
+    )
 
     # LLM
     LLM_PROVIDER: str = "none"
@@ -26,7 +32,10 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 720  # 30 days
 
     # Google OAuth — get from console.cloud.google.com
-    GOOGLE_CLIENT_ID: str = ""
+    # This identifier is public browser configuration, not a secret.
+    GOOGLE_CLIENT_ID: str = (
+        "91461754884-h4kol63caeemh5gj78ip0kl2eo7207si.apps.googleusercontent.com"
+    )
 
     # Stripe — get from dashboard.stripe.com
     STRIPE_SECRET_KEY: str = ""

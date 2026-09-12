@@ -50,6 +50,7 @@ export default function Login() {
               <GoogleLogin
                 onSuccess={handleSuccess}
                 onError={() => alert('Google sign-in failed.')}
+                ux_mode="popup"
                 theme="filled_black"
                 shape="rectangular"
                 size="large"
