@@ -66,7 +66,12 @@ class Settings(BaseSettings):
 
     @property
     def async_database_url(self) -> str:
-        url = self.DATABASE_URL
+        # .strip(): a stray leading/trailing newline or space in the platform's
+        # DATABASE_URL variable (e.g. from how a value was pasted/referenced)
+        # otherwise breaks both the startswith() check below AND SQLAlchemy's
+        # own URL parser, crashing the app at import time with a stack trace
+        # that doesn't obviously point at whitespace as the cause.
+        url = self.DATABASE_URL.strip()
         # Railway provides postgresql:// — asyncpg needs postgresql+asyncpg://
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
