@@ -15,6 +15,8 @@ import httpx
 import json
 from typing import Optional
 from app.core.config import settings
+from app.services.quiz_policy import (QuizUnavailableError, quiz_prompt, review_prompt,
+                                      validate_questions, validate_request)
 
 # ── In-memory response cache ────────────────────────────────────────────────────
 # Identical problems (same text + difficulty) return a cached result instantly.
@@ -604,31 +606,32 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
 
 
 async def generate_quiz_questions(topic: str, difficulty: str, count: int = 5) -> list:
-    """Generate quiz questions via LLM or local templates."""
+    """Generate and review against a topic-specific difficulty contract.
+
+    Fail explicitly instead of relabeling introductory templates as advanced.
+    Model review is a quality filter, not a proof of correctness.
+    """
+    validate_request(topic, difficulty, count)
     provider = settings.LLM_PROVIDER.lower()
-    prompt = f"""Generate {count} multiple-choice math questions about '{topic}' at '{difficulty}' level.
-
-Return ONLY a JSON array. Each element: {{"question": "...", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "answer": "A", "explanation": "..."}}
-
-No extra text — pure JSON array only."""
-
+    callers = {
+        "anthropic": (settings.ANTHROPIC_API_KEY, _call_anthropic),
+        "openai": (settings.OPENAI_API_KEY, _call_openai),
+        "gemini": (settings.GEMINI_API_KEY, _call_gemini),
+    }
+    key, caller = callers.get(provider, ("", None))
+    if not caller or not _key_looks_real(key):
+        raise QuizUnavailableError("Quiz generation is temporarily unavailable. Please try again later.")
+    prompt = quiz_prompt(topic, difficulty, count)
     try:
-        raw = ""
-        if provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY):
-            raw = await _call_anthropic(prompt)
-        elif provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
-            raw = await _call_openai(prompt)
-        elif provider == "gemini" and _key_looks_real(settings.GEMINI_API_KEY):
-            raw = await _call_gemini(prompt)
-
-        if raw:
-            start, end = raw.find("["), raw.rfind("]") + 1
-            if start != -1 and end > start:
-                return json.loads(raw[start:end])
+        raw = await caller(prompt, max_tokens=min(16000, 600 * count))
+        questions = validate_questions(json.loads(raw.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()), count)
+        review = await caller(review_prompt(topic, difficulty, questions), max_tokens=1024)
+        verdict = json.loads(review.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip())
+        if verdict.get('accepted') is True:
+            return questions
     except Exception:
         pass
-
-    return _template_questions(topic, difficulty, count)
+    raise QuizUnavailableError("We couldn't generate a quiz that passed the quality checks at this level. Please try again.")
 
 
 def _template_questions(topic: str, difficulty: str, count: int) -> list:
