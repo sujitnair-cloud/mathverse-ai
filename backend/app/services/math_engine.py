@@ -269,7 +269,12 @@ def detect_topic(problem: str) -> str:
     # Use word boundary so "lim" in "limit" matches but not in "limits" of unrelated words
     if re.search(r"\b(limit|lim|approaches)\b", p):
         return "calculus_limits"
-    if any(k in p for k in ["matrix", "determinant", "eigenvalue", "inverse matrix"]):
+    # "[[" (a nested bracket) is essentially only ever used here for matrix
+    # notation, so treat it as linear algebra even without a keyword match —
+    # covers phrasings like "det [[1,2],[3,4]]" or "inverse of [[2,0],[0,2]]"
+    # that don't contain the literal word "matrix"/"determinant".
+    if (any(k in p for k in ["matrix", "determinant", "eigenvalue", "inverse matrix"])
+            or re.search(r"\bdet\b", p) or "[[" in p.replace(" ", "")):
         return "linear_algebra"
     # Geometry must come before trigonometry because "triangle" contains "angle"
     if any(k in p for k in ["area", "perimeter", "volume", "geometry", "triangle", "circle", "rectangle", "square", "pythagorean", "hypotenuse"]):
@@ -839,6 +844,32 @@ def _solve_trigonometry(problem: str, result: Dict) -> Dict:
             result["steps"] = steps
             result["formulas_used"] = ["Pythagorean Theorem: a² + b² = c²"]
             return result
+
+    # Symbolic simplification fallback, e.g. "sin(x)^2 + cos(x)^2". The
+    # per-function loop above only ever evaluates a single sin/cos/tan(...)
+    # call in isolation, so a compound symbolic expression like this one
+    # never matches it and fell straight through to the generic message
+    # below even though SymPy can simplify it directly (to 1, here).
+    try:
+        candidate = p
+        for prefix in ("simplify:", "simplify "):
+            if candidate.startswith(prefix):
+                candidate = candidate[len(prefix):].strip()
+        if not looks_like_prose(candidate):
+            expr = safe_parse(candidate)
+            if expr.free_symbols:  # symbolic only — numeric cases were already tried above
+                simplified = trigsimp(simplify(expr))
+                if simplified != expr:
+                    steps.append({"step": 1, "description": "Original expression", "expression": str(expr)})
+                    steps.append({"step": 2, "description": "Apply trigonometric identities and simplify", "expression": str(simplified)})
+                    result["answer"] = str(simplified)
+                    result["latex_answer"] = f"{latex(expr)} = {latex(simplified)}"
+                    result["steps"] = steps
+                    result["formulas_used"] = ["sin²θ + cos²θ = 1", "Trigonometric identities"]
+                    result["common_mistakes"] = ["Mixing up sin/cos identities", "Forgetting the Pythagorean identity"]
+                    return result
+    except Exception:
+        pass
 
     result["answer"] = "Please specify: sin/cos/tan(angle) or use 'pythagorean theorem with a=?, b=?'"
     result["steps"] = steps

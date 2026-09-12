@@ -67,6 +67,42 @@ class SecurityTests(unittest.TestCase):
                 safe_parse(expr)  # must not raise
 
 
+class MatrixRoutingTests(unittest.TestCase):
+    """"det [[1,2],[3,4]]" and "inverse of [[2,0],[0,2]]" don't contain the
+    literal words "matrix"/"determinant" that topic detection looked for,
+    so they fell through to the generic algebra solver and crashed trying
+    to parse bracket syntax as an ordinary expression."""
+
+    def test_det_without_the_word_matrix_routes_correctly(self):
+        r = solve_expression("det [[1,2],[3,4]]")
+        self.assertIn("-2", r["answer"])
+        self.assertIsNone(r["error"])
+
+    def test_inverse_of_without_the_word_matrix_routes_correctly(self):
+        r = solve_expression("inverse of [[2,0],[0,2]]")
+        self.assertIsNone(r["error"])
+        self.assertIn("det", r["answer"])
+
+
+class TrigSimplificationTests(unittest.TestCase):
+    """The trig solver only ever evaluated a single sin/cos/tan(...) call
+    in isolation, so a compound symbolic expression like the Pythagorean
+    identity never matched and fell through to a generic non-answer even
+    though SymPy can simplify it directly."""
+
+    def test_pythagorean_identity_simplifies_to_one(self):
+        r = solve_expression("sin(x)^2 + cos(x)^2")
+        self.assertEqual(r["answer"], "1")
+
+    def test_tan_cos_simplifies_to_sin(self):
+        r = solve_expression("tan(x)*cos(x)")
+        self.assertEqual(r["answer"], "sin(x)")
+
+    def test_numeric_evaluation_still_works(self):
+        r = solve_expression("sin(45)")
+        self.assertIn("sqrt(2)/2", r["answer"])
+
+
 class InverseTrigTests(unittest.TestCase):
     """atan/acos/asin were silently matched as tan/cos/sin (substring match),
     and even once matched correctly, the degrees-to-radians conversion meant
