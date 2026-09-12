@@ -6,12 +6,19 @@ import clsx from 'clsx'
 
 const TOPICS = ['algebra', 'calculus', 'statistics', 'geometry', 'trigonometry', 'probability', 'linear-algebra']
 const DIFFICULTIES = ['basic', 'intermediate', 'advanced']
+const LEVEL_HELP: Record<string, string> = {
+  basic: 'Foundations: apply one definition or standard rule.',
+  intermediate: 'Application: choose a method and combine several steps.',
+  advanced: 'Reasoning: connect concepts, analyze conditions and justify conclusions.',
+}
 
 export default function Quiz() {
   const [topic, setTopic] = useState('algebra')
   const [difficulty, setDifficulty] = useState('intermediate')
   const [count, setCount] = useState(5)
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
+  const [quizId, setQuizId] = useState('')
+  const [error, setError] = useState('')
   const [answers, setAnswers] = useState<string[]>([])
   const [result, setResult] = useState<null | { score: number; grade: string; graded_questions: { question: string; user_answer: string; correct_answer: string; explanation: string; is_correct: boolean }[] }>(null)
   const [loading, setLoading] = useState(false)
@@ -19,11 +26,16 @@ export default function Quiz() {
 
   const startQuiz = async () => {
     setLoading(true)
+    setError('')
     setResult(null)
     setAnswers([])
     try {
       const data = await generateQuiz(topic, difficulty, count)
       setQuestions(data.questions)
+      setQuizId(data.quiz_id)
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'Could not generate the quiz. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -38,14 +50,17 @@ export default function Quiz() {
   }
 
   const handleSubmit = async () => {
-    if (answers.length !== questions.length || answers.some(a => !a)) {
+    if (questions.some((_, i) => !answers[i])) {
       alert('Please answer all questions.')
       return
     }
     setSubmitting(true)
+    setError('')
     try {
-      const data = await submitQuiz(topic, difficulty, questions, answers)
+      const data = await submitQuiz(quizId, answers)
       setResult(data)
+    } catch {
+      setError('Could not submit your answers. Please try again, or start a new quiz if this quiz is no longer available.')
     } finally {
       setSubmitting(false)
     }
@@ -65,6 +80,7 @@ export default function Quiz() {
         <p className="text-slate-400">AI-generated questions to test your mathematics knowledge.</p>
       </div>
 
+      {error && <p role="alert" className="mb-4 rounded-xl border border-amber-500/40 p-4 text-amber-200">{error}</p>}
       {/* Setup */}
       {!questions.length && !loading && (
         <div className="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-6">
@@ -87,12 +103,16 @@ export default function Quiz() {
               <label className="text-slate-400 text-sm mb-2 block">Difficulty</label>
               <div className="flex gap-2">
                 {DIFFICULTIES.map(d => (
-                  <button key={d} onClick={() => setDifficulty(d)}
+                  <button key={d} onClick={() => setDifficulty(d)} aria-pressed={difficulty === d}
                     className={clsx('px-4 py-1.5 rounded-lg text-sm capitalize transition-all', difficulty === d ? 'bg-indigo-500/30 border border-indigo-500/50 text-indigo-200' : 'bg-slate-700/50 border border-slate-600 text-slate-400 hover:text-white')}>
                     {d}
                   </button>
                 ))}
               </div>
+              <p className="text-slate-400 text-sm mt-2">{LEVEL_HELP[difficulty]}</p>
+              {topic === 'calculus' && difficulty === 'advanced' && (
+                <p className="text-slate-400 text-sm mt-2">Includes convergence, Taylor remainder bounds and parameter-dependent limits; assumes introductory calculus.</p>
+              )}
             </div>
 
             <div>

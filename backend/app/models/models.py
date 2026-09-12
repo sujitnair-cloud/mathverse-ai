@@ -73,6 +73,17 @@ class MathTopic(Base):
     prerequisites = Column(JSON)
 
 
+class GeneratedQuiz(Base):
+    __tablename__ = "generated_quizzes"
+
+    id = Column(String(36), primary_key=True)
+    session_id = Column(String(64), index=True)
+    topic = Column(String(100))
+    difficulty = Column(String(20))
+    questions = Column(JSON)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class QuizAttempt(Base):
     __tablename__ = "quiz_attempts"
 
