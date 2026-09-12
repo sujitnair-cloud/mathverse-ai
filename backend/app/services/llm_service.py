@@ -15,6 +15,7 @@ import httpx
 import json
 from typing import Optional
 from app.core.config import settings
+from app.services.quiz_generator import generate_verified_questions
 
 # ── In-memory response cache ────────────────────────────────────────────────────
 # Identical problems (same text + difficulty) return a cached result instantly.
@@ -653,15 +654,81 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
     return None
 
 
-async def generate_quiz_questions(topic: str, difficulty: str, count: int = 5) -> list:
-    """Generate quiz questions via LLM or local templates."""
+_DEMAND_DESCRIPTIONS = {
+    "routine": "a single, direct application of one formula or rule — no multi-step reasoning",
+    "multi_step": "two or more connected steps (e.g. combine like terms, then solve; or apply one rule, then another)",
+    "unfamiliar": "a variation that can't be solved by pattern-matching a memorized template — "
+                  "e.g. the variable on both sides, a non-obvious substitution, or a twist on the routine form",
+}
+
+
+def _valid_quiz_question(q) -> bool:
+    """
+    Structural validation applied to every question regardless of source
+    (LLM or generator) before it's ever shown to a student: well-formed
+    options, a unique answer letter that matches one option, and — the part
+    a naive structural check misses — no two options sharing the same value,
+    which would make the question ambiguous even though it "looks" valid.
+    """
+    if not isinstance(q, dict):
+        return False
+    if not isinstance(q.get("question"), str) or not q["question"].strip():
+        return False
+    options = q.get("options")
+    if not isinstance(options, list) or len(options) < 2:
+        return False
+    if any(not isinstance(o, str) or not o.strip() for o in options):
+        return False
+    option_letters = {o[0].upper() for o in options}
+    if len(option_letters) != len(options):
+        return False  # duplicate letters
+    option_values = {o[3:].strip().lower() for o in options}
+    if len(option_values) != len(options):
+        return False  # two options evaluate/read the same — ambiguous
+    answer = q.get("answer")
+    return isinstance(answer, str) and answer.strip().upper() in option_letters
+
+
+async def generate_quiz_questions(topic: str, level: str, demand: str = "routine", count: int = 5) -> list:
+    """
+    Generate quiz questions either via LLM (given a rigor-and-validation
+    blueprint) or via generate_verified_questions(), whose answers are
+    computed by SymPy rather than hand-written or guessed by a model.
+
+    `level` is how advanced the topic/formulas are (basic/intermediate/
+    advanced/expert); `demand` is how much reasoning a routine application
+    takes, independent of level (routine/multi_step/unfamiliar) — these are
+    deliberately two separate axes instead of one flattened "difficulty",
+    since a routine question and an unfamiliar one at the same level are not
+    interchangeable, and a single label was collapsing that distinction.
+
+    Every question — from either source — is structurally validated before
+    being returned; an LLM question that fails validation (ambiguous
+    options, a stated answer that doesn't match any option, etc.) is
+    dropped and backfilled with a verified generated question rather than
+    shown to a student.
+    """
     provider = settings.LLM_PROVIDER.lower()
-    prompt = f"""Generate {count} multiple-choice math questions about '{topic}' at '{difficulty}' level.
+    demand_desc = _DEMAND_DESCRIPTIONS.get(demand, _DEMAND_DESCRIPTIONS["routine"])
+    prompt = f"""Generate {count} multiple-choice math questions about '{topic}' at '{level}' level.
+
+Question demand: '{demand}' — each question should require {demand_desc}.
+
+Work out the full solution yourself, step by step, BEFORE writing the
+question down, so the "answer" you report is verified, not guessed. Then:
+- Write exactly 4 options. Exactly ONE may be correct.
+- Make the 3 incorrect options plausible: each should be the value a
+  student would get from one specific, realistic mistake (a sign error,
+  the wrong formula, an off-by-one, a dropped constant of integration,
+  etc.) — not random unrelated numbers.
+- No two options may share the same value.
+- Every question in the batch must be different from the others.
 
 Return ONLY a JSON array. Each element: {{"question": "...", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "answer": "A", "explanation": "..."}}
 
 No extra text — pure JSON array only."""
 
+    questions: list = []
     try:
         raw = ""
         if provider == "anthropic" and _key_looks_real(settings.ANTHROPIC_API_KEY):
@@ -674,110 +741,16 @@ No extra text — pure JSON array only."""
         if raw:
             start, end = raw.find("["), raw.rfind("]") + 1
             if start != -1 and end > start:
-                return json.loads(raw[start:end])
+                parsed = json.loads(raw[start:end])
+                if isinstance(parsed, list):
+                    questions = [q for q in parsed if _valid_quiz_question(q)]
     except Exception:
         pass
 
-    return _template_questions(topic, difficulty, count)
+    if len(questions) < count:
+        # Either no LLM is configured, or it returned fewer valid questions
+        # than asked for — top up with SymPy-verified generated ones rather
+        # than show fewer questions than the student requested.
+        questions += generate_verified_questions(topic, level, demand, count - len(questions))
 
-
-def _template_questions(topic: str, difficulty: str, count: int) -> list:
-    """Comprehensive built-in question bank — used when no LLM key is set."""
-    bank: dict = {
-        "algebra": [
-            {"question": "Solve: 2x + 4 = 10",
-             "options": ["A) x = 2", "B) x = 3", "C) x = 4", "D) x = 7"],
-             "answer": "B", "explanation": "2x = 6, x = 3"},
-            {"question": "Expand: (x + 3)²",
-             "options": ["A) x² + 6x + 9", "B) x² + 9", "C) x² + 3x + 9", "D) x² + 6x + 6"],
-             "answer": "A", "explanation": "(a+b)² = a² + 2ab + b²"},
-            {"question": "Factor: x² − 9",
-             "options": ["A) (x−3)²", "B) (x+3)(x−3)", "C) (x+9)(x−1)", "D) (x+3)²"],
-             "answer": "B", "explanation": "Difference of squares: a²−b² = (a+b)(a−b)"},
-            {"question": "Solve: x² − 5x + 6 = 0",
-             "options": ["A) x=1, x=6", "B) x=2, x=3", "C) x=−2, x=−3", "D) x=−1, x=6"],
-             "answer": "B", "explanation": "Factor: (x−2)(x−3)=0"},
-            {"question": "If f(x) = 3x − 2, what is f(4)?",
-             "options": ["A) 10", "B) 12", "C) 14", "D) 8"],
-             "answer": "A", "explanation": "f(4) = 3(4) − 2 = 10"},
-        ],
-        "calculus": [
-            {"question": "d/dx(x³) = ?",
-             "options": ["A) 3x", "B) 3x²", "C) x²", "D) 2x³"],
-             "answer": "B", "explanation": "Power rule: d/dx(xⁿ) = nxⁿ⁻¹"},
-            {"question": "∫2x dx = ?",
-             "options": ["A) 2x² + C", "B) x² + C", "C) x + C", "D) 2 + C"],
-             "answer": "B", "explanation": "∫2x dx = x² + C"},
-            {"question": "d/dx(sin x) = ?",
-             "options": ["A) cos x", "B) −cos x", "C) tan x", "D) −sin x"],
-             "answer": "A", "explanation": "Standard derivative: d/dx(sin x) = cos x"},
-            {"question": "lim(x→0) sin(x)/x = ?",
-             "options": ["A) 0", "B) ∞", "C) 1", "D) undefined"],
-             "answer": "C", "explanation": "Standard limit: lim(x→0) sin(x)/x = 1"},
-            {"question": "∫eˣ dx = ?",
-             "options": ["A) eˣ + C", "B) eˣ/x + C", "C) xeˣ + C", "D) e + C"],
-             "answer": "A", "explanation": "eˣ is its own antiderivative"},
-        ],
-        "statistics": [
-            {"question": "Mean of [2, 4, 6, 8, 10] = ?",
-             "options": ["A) 5", "B) 6", "C) 7", "D) 4"],
-             "answer": "B", "explanation": "Sum=30, Count=5, Mean=6"},
-            {"question": "Median of [3, 1, 4, 1, 5, 9, 2] = ?",
-             "options": ["A) 3", "B) 4", "C) 1", "D) 5"],
-             "answer": "A", "explanation": "Sorted: [1,1,2,3,4,5,9], middle=3"},
-            {"question": "Which measure is most affected by outliers?",
-             "options": ["A) Median", "B) Mode", "C) Mean", "D) Range"],
-             "answer": "C", "explanation": "Mean uses all values so extreme values shift it"},
-            {"question": "Standard deviation measures…",
-             "options": ["A) central tendency", "B) spread around the mean", "C) most frequent value", "D) largest value"],
-             "answer": "B", "explanation": "Std dev = √(variance) = spread of data"},
-        ],
-        "geometry": [
-            {"question": "Area of a circle with radius 5 = ?",
-             "options": ["A) 25π", "B) 10π", "C) 5π", "D) 50π"],
-             "answer": "A", "explanation": "A = πr² = π×25 = 25π"},
-            {"question": "Hypotenuse when a=3, b=4 = ?",
-             "options": ["A) 5", "B) 7", "C) 6", "D) 12"],
-             "answer": "A", "explanation": "c = √(9+16) = 5"},
-            {"question": "Perimeter of rectangle 6×4 = ?",
-             "options": ["A) 24", "B) 20", "C) 10", "D) 16"],
-             "answer": "B", "explanation": "P = 2(l+w) = 2×10 = 20"},
-        ],
-        "trigonometry": [
-            {"question": "sin(30°) = ?",
-             "options": ["A) 1", "B) 0", "C) 1/2", "D) √3/2"],
-             "answer": "C", "explanation": "Special angle: sin 30° = 1/2"},
-            {"question": "cos(60°) = ?",
-             "options": ["A) 1/2", "B) √3/2", "C) 1", "D) 0"],
-             "answer": "A", "explanation": "Special angle: cos 60° = 1/2"},
-            {"question": "tan(45°) = ?",
-             "options": ["A) 0", "B) ∞", "C) √2", "D) 1"],
-             "answer": "D", "explanation": "tan 45° = sin/cos = (1/√2)/(1/√2) = 1"},
-        ],
-        "probability": [
-            {"question": "C(5, 2) = ?",
-             "options": ["A) 10", "B) 20", "C) 5", "D) 25"],
-             "answer": "A", "explanation": "5!/(2!×3!) = 10"},
-            {"question": "P(rolling a 6 on a fair die) = ?",
-             "options": ["A) 1/3", "B) 1/6", "C) 1/2", "D) 1/12"],
-             "answer": "B", "explanation": "1 favourable / 6 total outcomes"},
-            {"question": "P(5, 2) = ?",
-             "options": ["A) 10", "B) 20", "C) 15", "D) 25"],
-             "answer": "B", "explanation": "5!/(5-2)! = 5×4 = 20"},
-        ],
-        "linear-algebra": [
-            {"question": "det([[1,2],[3,4]]) = ?",
-             "options": ["A) 2", "B) −2", "C) 10", "D) 4"],
-             "answer": "B", "explanation": "1×4 − 2×3 = 4−6 = −2"},
-            {"question": "The inverse of a matrix exists when…",
-             "options": ["A) det = 0", "B) det ≠ 0", "C) det = 1", "D) det < 0"],
-             "answer": "B", "explanation": "If det = 0, the matrix is singular (no inverse)"},
-        ],
-    }
-
-    key = topic.lower().replace(" ", "-").split("_")[0]
-    questions = bank.get(key, bank["algebra"])
-    result = []
-    for i in range(count):
-        result.append(questions[i % len(questions)])
-    return result
+    return questions[:count]
