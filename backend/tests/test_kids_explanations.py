@@ -12,7 +12,7 @@ import unittest
 
 # Load pure prompt helpers without API keys, provider calls, or database setup.
 SOURCE = Path(__file__).resolve().parents[1] / 'app/services/llm_service.py'
-tree = ast.parse(SOURCE.read_text())
+tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
 nodes = [node for node in tree.body if (
     isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     and node.name in {'_build_prompt', '_rich_fallback', '_get_topic_info',

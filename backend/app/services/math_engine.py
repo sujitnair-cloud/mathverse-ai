@@ -259,12 +259,25 @@ def _infer_variable(expr: Any, problem: str, default_name: str = "x") -> Any:
     return default
 
 
+_EXTREMA_KEYWORDS = (
+    "local maximum", "local minimum", "local max", "local min",
+    "global maximum", "global minimum", "absolute maximum", "absolute minimum",
+    "extremum", "extrema", "critical point", "critical number", "stationary point",
+)
+
+
 def detect_topic(problem: str) -> str:
     """Heuristically detect the math topic from a problem string."""
     p = problem.lower()
     if any(k in p for k in ["integral", "integrate", "antiderivative"]) or "∫" in p:
         return "calculus_integration"
     if any(k in p for k in ["derivative", "differentiate", "d/dx"]):
+        return "calculus_differentiation"
+    # Finding a local max/min, extremum, or inflection point requires taking
+    # a derivative even when the problem never says "derivative"/"d/dx" —
+    # without this, a phrasing like "at which value of x does f have a local
+    # maximum" fell through to the quadratic/general checks below.
+    if any(k in p for k in _EXTREMA_KEYWORDS + ("inflection point", "concave", "increasing or decreasing", "rate of change")):
         return "calculus_differentiation"
     # Use word boundary so "lim" in "limit" matches but not in "limits" of unrelated words
     if re.search(r"\b(limit|lim|approaches)\b", p):
@@ -282,7 +295,15 @@ def detect_topic(problem: str) -> str:
     # Use word boundaries to prevent "sin" matching inside "simultaneously", "cosine" in "discourse", etc.
     if re.search(r"\b(sin|cos|tan|asin|acos|atan|sine|cosine|tangent|angle|degrees?|radians?|trigonometric)\b", p):
         return "trigonometry"
-    if any(k in p for k in ["quadratic", "x²", "x^2", "x**2", "**2", "parabola"]):
+    # A cubic like "x³ - 6x² + 9x + 1" contains "x²" as a substring too, so a
+    # bare "x²"/"x^2" match alone isn't enough — only treat it as quadratic
+    # when there's no higher-degree term also present in the problem.
+    _has_higher_degree_term = bool(re.search(r"x\s*(?:\*\*|\^)\s*[3-9]\d*", p)) or any(
+        k in p for k in ["x³", "x⁴", "x⁵", "x⁶", "x⁷", "x⁸", "x⁹"]
+    )
+    if "quadratic" in p or "parabola" in p or (
+        any(k in p for k in ["x²", "x^2", "x**2", "**2"]) and not _has_higher_degree_term
+    ):
         return "algebra_quadratic"
     if any(k in p for k in ["linear equation", "solve for", "system of equations"]):
         return "algebra_linear"
@@ -373,6 +394,8 @@ def solve_expression(problem: str) -> Dict[str, Any]:
         topic = result["topic"]
 
         if topic == "calculus_differentiation":
+            if any(k in p.lower() for k in _EXTREMA_KEYWORDS):
+                return _solve_local_extrema(p, result)
             return _solve_differentiation(p, result)
         if topic == "calculus_integration":
             return _solve_integration(p, result)
@@ -508,6 +531,98 @@ def _solve_differentiation(problem: str, result: Dict) -> Dict:
         "Treating constants as variables"
     ]
     result["alternate_method"] = f"Using limits: lim(h→0) [f(x+h) - f(x)] / h"
+    return result
+
+
+def _extract_function_expr(problem: str) -> str:
+    """
+    Pull the expression out of a 'f(x) = ...' (or g(x), y = ...) definition
+    embedded in a word problem, e.g. "If f(x) = x^3 - 6x^2 + 9x + 1, at which
+    value of x does f have a local maximum?" -> "x^3 - 6x^2 + 9x + 1". Without
+    this, the whole prose sentence gets handed to the parser and rejected.
+    """
+    m = re.search(
+        r"[a-zA-Z]\s*\(\s*[a-zA-Z]\s*\)\s*=\s*(.+?)(?:,|\.\s|\.$|$| at | where | for | on \[)",
+        problem, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"\by\s*=\s*(.+?)(?:,|\.\s|\.$|$)", problem, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return problem
+
+
+def _solve_local_extrema(problem: str, result: Dict) -> Dict:
+    steps = []
+    expr_str = _extract_function_expr(problem).replace("^", "**")
+    expr_str = _strip_wrapping_parens(expr_str)
+
+    if looks_like_prose(expr_str):
+        result["error"] = _PROSE_ERROR
+        result["answer"] = None
+        return result
+
+    expr = safe_parse(expr_str)
+    x = _infer_variable(expr, problem)
+    steps.append({"step": 1, "description": "Identify the function", "expression": f"f({x}) = {expr}"})
+
+    first_deriv = simplify(diff(expr, x))
+    steps.append({"step": 2, "description": "Compute the first derivative", "expression": f"f'({x}) = {first_deriv}"})
+
+    critical_points = [cp for cp in solve(Eq(first_deriv, 0), x) if cp.is_real]
+    steps.append({
+        "step": 3,
+        "description": "Solve f'(x) = 0 for critical points",
+        "expression": f"{x} = " + ", ".join(str(cp) for cp in critical_points) if critical_points else "No real critical points",
+    })
+
+    second_deriv = simplify(diff(first_deriv, x))
+    steps.append({"step": 4, "description": "Compute the second derivative", "expression": f"f''({x}) = {second_deriv}"})
+
+    classified = []
+    for cp in critical_points:
+        second_at_cp = second_deriv.subs(x, cp)
+        if second_at_cp > 0:
+            kind = "local minimum"
+        elif second_at_cp < 0:
+            kind = "local maximum"
+        else:
+            kind = "inflection point (second derivative test inconclusive)"
+        classified.append((cp, kind))
+        steps.append({
+            "step": len(steps) + 1,
+            "description": f"Second derivative test at {x} = {cp}: f''({cp}) = {second_at_cp}",
+            "expression": f"{x} = {cp} is a {kind}",
+        })
+
+    p_lower = problem.lower()
+    wants_min = any(k in p_lower for k in ["minimum", "min"])
+    wants_max = any(k in p_lower for k in ["maximum", "max"])
+    if wants_max and not wants_min:
+        matches = [cp for cp, kind in classified if kind == "local maximum"]
+    elif wants_min and not wants_max:
+        matches = [cp for cp, kind in classified if kind == "local minimum"]
+    else:
+        matches = [cp for cp, _ in classified]
+
+    if not matches:
+        result["error"] = "This function has no local extremum of the requested type."
+        result["answer"] = None
+        return result
+
+    result["steps"] = steps
+    result["answer"] = ", ".join(f"{x} = {m}" for m in matches)
+    result["latex_answer"] = f"{latex(x)} = {', '.join(latex(m) for m in matches)}"
+    result["formulas_used"] = [
+        "First derivative test: critical points occur where f'(x) = 0",
+        "Second derivative test: f''(x) > 0 -> local min, f''(x) < 0 -> local max",
+    ]
+    result["common_mistakes"] = [
+        "Forgetting to discard non-real roots of f'(x) = 0",
+        "Confusing local maxima with local minima when reading the sign of f''(x)",
+        "Not checking endpoints separately when the domain is a closed interval",
+    ]
     return result
 
 

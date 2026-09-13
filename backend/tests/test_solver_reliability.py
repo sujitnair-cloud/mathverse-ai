@@ -9,7 +9,7 @@ import unittest
 
 from app.services.math_engine import (
     solve_expression, generate_function_points, is_llm_first_problem, looks_like_prose,
-    safe_parse, UnsafeExpressionError,
+    safe_parse, UnsafeExpressionError, detect_topic,
 )
 from app.services.graph_service import build_3d_surface, build_function_graph
 
@@ -213,6 +213,36 @@ class EquationVariableChoiceTests(unittest.TestCase):
     def test_prefers_x_over_alphabetically_earlier_variables(self):
         r = solve_expression("y = m*x + c")
         self.assertIn("/m", r["answer"])  # solved for x: (y - c) / m
+
+
+class LocalExtremaTests(unittest.TestCase):
+    """
+    "If f(x) = x^3 - 6x^2 + 9x + 1, at which value of x does f have a local
+    maximum?" was misrouted as topic "algebra_quadratic" — the topic detector
+    did a bare substring match for "x^2", which also matches the "-6x^2" term
+    inside a genuinely cubic expression. That produced a wrong-topic AI
+    explanation (quadratic formula/discriminant) for a calculus problem, and
+    the differentiation solver itself only strips instruction words like
+    "derivative of" — it had no handling for this word-problem phrasing at
+    all, so it fell through to the prose-rejection guard instead of solving.
+    """
+
+    def test_cubic_with_x_squared_term_is_not_misdetected_as_quadratic(self):
+        topic = detect_topic("If f(x) = x^3 - 6x^2 + 9x + 1, at which value of x does f have a local maximum?")
+        self.assertEqual(topic, "calculus_differentiation")
+
+    def test_true_quadratic_is_still_detected_correctly(self):
+        self.assertEqual(detect_topic("Solve x^2 - 5x + 6 = 0"), "algebra_quadratic")
+
+    def test_local_maximum_word_problem_solves_to_correct_critical_point(self):
+        r = solve_expression("If f(x) = x^3 - 6x^2 + 9x + 1, at which value of x does f have a local maximum?")
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["answer"], "x = 1")
+
+    def test_local_minimum_word_problem_solves_to_correct_critical_point(self):
+        r = solve_expression("If f(x) = x^3 - 6x^2 + 9x + 1, at which value of x does f have a local minimum?")
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["answer"], "x = 3")
 
 
 if __name__ == "__main__":
