@@ -46,6 +46,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true)
     try {
       const { data } = await axios.post(`${API_BASE}/auth/google`, { credential: googleCredential })
+      if (!data?.access_token || !data?.user) {
+        throw new Error('The sign-in service returned an incomplete response.')
+      }
       localStorage.setItem(TOKEN_KEY, data.access_token)
       localStorage.setItem(USER_KEY, JSON.stringify(data.user))
       setToken(data.access_token)
