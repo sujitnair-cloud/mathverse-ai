@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import axios from 'axios'
+import api from '../services/api'
 
 interface AuthUser {
   id: number
@@ -21,10 +22,6 @@ const AuthContext = createContext<AuthContextType | null>(null)
 const TOKEN_KEY = 'mathverse_token'
 const USER_KEY = 'mathverse_user'
 
-const API_BASE = import.meta.env.VITE_API_URL
-  ? `${import.meta.env.VITE_API_URL}/api/v1`
-  : '/api/v1'
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => {
     try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null') } catch { return null }
@@ -35,7 +32,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Verify stored token on mount
   useEffect(() => {
     if (!token) return
-    axios.get(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+    // Uses the shared `api` client (not raw axios) so this benefits from its
+    // retry-on-transient-network-failure interceptor — the intermittent DNS
+    // resolution miss for the Railway hostname that broke sign-in previously
+    // affects every request equally, not just login itself.
+    api.get('/auth/me')
       .then(r => { if (!r.data.authenticated) logout() })
       .catch(error => {
         if (axios.isAxiosError(error) && error.response?.status === 401) logout()
@@ -45,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (googleCredential: string) => {
     setLoading(true)
     try {
-      const { data } = await axios.post(`${API_BASE}/auth/google`, { credential: googleCredential })
+      const { data } = await api.post('/auth/google', { credential: googleCredential })
       if (!data?.access_token) {
         // A service worker (or any proxy) returning a 200 with an
         // unexpected body must not be treated as a successful login —
