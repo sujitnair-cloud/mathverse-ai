@@ -19,14 +19,16 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// Retry once or twice on a transient network failure (no response reached
-// the browser at all — e.g. an intermittent DNS resolution miss for the
-// Railway hostname, observed in production) or a 503 (also what our own
-// service worker's offline fallback returns for the same kind of failure).
-// A single flaky lookup shouldn't surface as a hard error to the user when
-// a short retry would just work.
-const MAX_RETRIES = 2
-const RETRY_DELAY_MS = 800
+// Retry on a transient network failure (no response reached the browser at
+// all — confirmed in production to be an intermittent DNS resolution miss
+// for the Railway hostname that can recur for well over the few seconds a
+// couple of quick retries covers) or a 503 (also what our own service
+// worker's offline fallback returns for the same kind of failure). A flaky
+// lookup shouldn't surface as a hard error when patience would just work —
+// 5 attempts with growing backoff rides out up to ~30s of intermittent
+// resolution failures instead of giving up after ~2.
+const MAX_RETRIES = 5
+const RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000]
 
 api.interceptors.response.use(
   response => response,
@@ -36,7 +38,8 @@ api.interceptors.response.use(
     if (config && isTransient) {
       config.__retryCount = (config.__retryCount || 0) + 1
       if (config.__retryCount <= MAX_RETRIES) {
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS * config.__retryCount))
+        const delay = RETRY_DELAYS_MS[config.__retryCount - 1]
+        await new Promise(resolve => setTimeout(resolve, delay))
         return api(config)
       }
     }
