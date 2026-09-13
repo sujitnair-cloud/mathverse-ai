@@ -15,6 +15,7 @@ on:
     branches: [master]
     paths:
       - 'backend/**'
+  workflow_dispatch: {} # allows a manual test run from the Actions tab
 
 jobs:
   deploy:
