@@ -1,0 +1,32 @@
+name: Deploy backend to Railway
+
+# Railway's own dashboard "watch paths" (Config-as-code watchPatterns) is
+# deprecated for any service that never used it before 2026-08-28, which
+# is this one -- the setting silently reverts on save and can't be relied
+# on. Without it, Railway's default "deploy on any push to master" restarts
+# the live backend on every commit, including frontend-only ones, causing
+# a real (if brief) downtime window each time -- confirmed directly via a
+# 503 on the live site with zero matching entries in Railway's own request
+# logs at that timestamp. This workflow replaces Railway's built-in
+# auto-deploy (disabled in the Railway dashboard) with GitHub's own native
+# path filtering below, so only an actual backend/ change deploys it.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'backend/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: bash <(curl -fsSL railway.com/install.sh)
+
+      - name: Deploy to Railway
+        working-directory: backend
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service mathverse-ai --detach
