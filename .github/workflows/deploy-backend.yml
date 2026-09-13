@@ -31,8 +31,13 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
+      # Deploy from the repo root, not backend/ -- the service's own Root
+      # Directory setting ("/backend") narrows the uploaded source itself.
+      # cd'ing into backend/ first uploaded its *contents* as the source
+      # root, so Railway then looked for a nonexistent backend/backend/ and
+      # failed with "Root directory '/backend' was not found in the
+      # deployed source" (confirmed via the actual failed build's logs).
       - name: Deploy to Railway
-        working-directory: backend
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: railway up --service mathverse-ai --detach
