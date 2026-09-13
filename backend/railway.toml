@@ -1,12 +1,18 @@
-# Without this, Railway rebuilds and restarts the live backend on every push
-# to master -- including frontend-only commits -- because the dashboard's
-# Root Directory setting only controls the build context, not which changes
-# trigger a deploy in the first place. That caused real (if brief) backend
-# downtime windows on pushes that never touched backend/ at all, observed
-# directly as 503s with nothing in Railway's own request logs at that
-# moment. watchPatterns restricts deploys to changes actually under backend/.
-#
-# Paths here are relative to the repo root, not this file's own directory
-# (Railway's own monorepo docs example: "/packages/backend/**").
+# NOTE: watchPatterns below is currently INERT for this service. Railway's
+# dashboard "Config as Code" file path setting (Settings -> Config-as-code)
+# is deprecated and refuses to persist for any service that never used it
+# before Railway's 2026-08-28 cutoff -- confirmed directly: it reverts to
+# empty on every save attempt, even after a hard refresh. Without that path
+# pointed at this file, Railway never reads it, so watchPatterns has no
+# effect. The actual fix in place is:
+#   - Railway's own "Auto deploys when pushed to GitHub" is disabled
+#     (Settings -> Source) for this service.
+#   - .github/workflows/deploy-backend.yml deploys it instead, using
+#     GitHub's native `paths: ['backend/**']` push filter, which isn't
+#     affected by Railway's deprecation.
+# Left in place in case Railway ever un-blocks Config-as-code for this
+# service (support ticket, plan change, etc.) -- paths here are relative
+# to the repo root, not this file's own directory, per Railway's own
+# monorepo docs example ("/packages/backend/**").
 [build]
 watchPatterns = ["/backend/**"]
