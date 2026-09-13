@@ -22,8 +22,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The shell-script installer (railway.com/install.sh) put the `railway`
+      # binary somewhere not on PATH for the next step -- each step runs in
+      # its own shell invocation, so a plain script-added PATH change doesn't
+      # carry over. npm's global bin dir is already on PATH by default on
+      # GitHub-hosted runners, so this avoids that problem entirely.
       - name: Install Railway CLI
-        run: bash <(curl -fsSL railway.com/install.sh)
+        run: npm install -g @railway/cli
 
       - name: Deploy to Railway
         working-directory: backend
