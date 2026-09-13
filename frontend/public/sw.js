@@ -32,7 +32,15 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/api/')) {
     e.respondWith(
       fetch(request).catch(() =>
+        // A real network failure (offline, DNS, connection refused, etc).
+        // Must NOT be status 200 — `new Response()` defaults to 200, which
+        // previously made every genuine failure look like a successful API
+        // call with a body of {error: "You are offline"}. That masked the
+        // real error behind a fake "200 OK (from service worker)" in
+        // DevTools and silently corrupted auth state (access_token/user
+        // ended up as the literal string "undefined" in localStorage).
         new Response(JSON.stringify({ error: 'You are offline' }), {
+          status: 503,
           headers: { 'Content-Type': 'application/json' },
         })
       )

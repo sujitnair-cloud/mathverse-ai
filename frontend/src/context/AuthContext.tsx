@@ -46,6 +46,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true)
     try {
       const { data } = await axios.post(`${API_BASE}/auth/google`, { credential: googleCredential })
+      if (!data?.access_token) {
+        // A service worker (or any proxy) returning a 200 with an
+        // unexpected body must not be treated as a successful login —
+        // that previously stored the literal string "undefined" as the
+        // token and left the UI stuck showing "Sign in" with no error.
+        throw new Error('Sign-in response did not include an access token')
+      }
       localStorage.setItem(TOKEN_KEY, data.access_token)
       localStorage.setItem(USER_KEY, JSON.stringify(data.user))
       setToken(data.access_token)
