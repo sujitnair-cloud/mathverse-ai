@@ -1,23 +1,36 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { GoogleLogin, CredentialResponse } from '@react-oauth/google'
+import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 
 export default function Login() {
   const { user, login, loading } = useAuth()
   const navigate = useNavigate()
+  const [signInError, setSignInError] = useState('')
 
   useEffect(() => {
     if (user) navigate('/', { replace: true })
   }, [user, navigate])
 
   const handleSuccess = async (res: CredentialResponse) => {
-    if (!res.credential) return
+    setSignInError('')
+    if (!res.credential) {
+      setSignInError('Google did not return a sign-in credential. Please try again.')
+      return
+    }
     try {
       await login(res.credential)
       navigate('/', { replace: true })
-    } catch {
-      alert('Sign-in failed. Please try again.')
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : undefined
+      if (typeof detail === 'string') {
+        setSignInError(detail)
+      } else if (axios.isAxiosError(error) && error.request) {
+        setSignInError('Could not reach the sign-in service. Please try again in a moment.')
+      } else {
+        setSignInError('Sign-in could not be completed. Please try again.')
+      }
     }
   }
 
@@ -49,7 +62,7 @@ export default function Login() {
             ) : (
               <GoogleLogin
                 onSuccess={handleSuccess}
-                onError={() => alert('Google sign-in failed.')}
+                onError={() => setSignInError('Google sign-in was cancelled or blocked. Check that this site is allowed in Google OAuth, then try again.')}
                 ux_mode="popup"
                 theme="filled_black"
                 shape="rectangular"
@@ -58,6 +71,12 @@ export default function Login() {
               />
             )}
           </div>
+
+          {signInError && (
+            <p role="alert" className="mb-6 rounded-lg border border-red-500/40 bg-red-950/30 px-4 py-3 text-sm text-red-200">
+              {signInError}
+            </p>
+          )}
 
           <div className="border-t border-slate-700 pt-6">
             <button
