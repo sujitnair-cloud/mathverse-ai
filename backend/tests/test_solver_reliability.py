@@ -338,5 +338,33 @@ class EulersNumberTests(unittest.TestCase):
         self.assertEqual(r["answer"], "5.5")
 
 
+class DiceProbabilityTests(unittest.TestCase):
+    """
+    "A fair die is thrown twice. What is the probability that the sum of
+    the two outcomes is 8?" previously fell straight through to the generic
+    "Please specify: nCr(n,r)..." placeholder -- not flagged as an error,
+    just silently not an actual answer to the question asked. Computed by
+    brute-force enumeration over the sample space instead of a canned
+    formula, so it stays correct regardless of dice count/sides/target.
+    """
+
+    def test_two_dice_sum_of_8_is_5_over_36(self):
+        r = solve_expression(
+            "4. A fair die is thrown twice. What is the probability that the sum of the two outcomes is 8?"
+        )
+        self.assertIsNone(r["error"])
+        self.assertTrue(r["answer"].startswith("5/36"), r["answer"])
+
+    def test_two_dice_sum_of_7_is_1_over_6(self):
+        r = solve_expression("Two dice are rolled. What is the probability that the sum is 7?")
+        self.assertIsNone(r["error"])
+        self.assertTrue(r["answer"].startswith("1/6"), r["answer"])
+
+    def test_ncr_notation_still_routes_correctly_not_swallowed_by_dice_check(self):
+        r = solve_expression("C(10, 3)")
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["answer"], "120")
+
+
 if __name__ == "__main__":
     unittest.main()

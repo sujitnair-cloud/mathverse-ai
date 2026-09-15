@@ -892,7 +892,95 @@ def _solve_statistics(problem: str, result: Dict) -> Dict:
     return result
 
 
+_DICE_WORD_TO_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+
+
+def _solve_dice_probability(problem: str, result: Dict) -> Optional[Dict]:
+    """
+    Classic "a fair die is thrown twice/N times, what is the probability the
+    sum is K" word problem. Previously fell through to the generic
+    "Please specify: nCr(n,r)..." placeholder regardless of what was asked --
+    that placeholder isn't wrong-looking (no error field set), just silently
+    not an actual answer to the question. Computed by brute-force enumeration
+    over the finite sample space rather than a canned formula, so it's
+    correct regardless of exactly how many dice/sides are involved.
+    """
+    p = problem.lower()
+    if not re.search(r"\bdi(?:e|ce)\b", p) or not re.search(r"\b(thrown|rolled|tossed)\b", p):
+        return None
+
+    num_dice = None
+    if re.search(r"\btwice\b", p):
+        num_dice = 2
+    else:
+        m = re.search(r"\b(\d+|one|two|three|four|five|six)\s*(?:dice|di[ec]|times)\b", p)
+        if m:
+            token = m.group(1)
+            num_dice = _DICE_WORD_TO_NUM.get(token, int(token) if token.isdigit() else None)
+    if num_dice is None:
+        num_dice = 1
+
+    sides_match = re.search(r"(\d+)[\s-]*sided", p)
+    sides = int(sides_match.group(1)) if sides_match else 6
+
+    # "sum ... is/equals/of ... K" -- non-greedy up to the first digit run
+    # after "sum" so it still matches regardless of phrasing length in
+    # between (e.g. "sum of the two outcomes is 8").
+    target_match = re.search(r"\bsum\b[^\d]*?(\d+)", p)
+    if not target_match:
+        return None
+    target = int(target_match.group(1))
+
+    from itertools import product
+    from math import gcd
+    outcomes = list(product(range(1, sides + 1), repeat=num_dice))
+    favorable = [o for o in outcomes if sum(o) == target]
+    total, fav_count = len(outcomes), len(favorable)
+    g = gcd(fav_count, total) if fav_count else total
+    simplified = f"{fav_count // g}/{total // g}" if fav_count else "0"
+    decimal = fav_count / total
+
+    steps = [
+        {
+            "step": 1,
+            "description": f"Sample space: {num_dice} {'die' if num_dice == 1 else 'dice'} with {sides} faces each",
+            "expression": f"Total outcomes = {sides}^{num_dice} = {total}",
+            "latex": f"{sides}^{{{num_dice}}} = {total}",
+        },
+        {
+            "step": 2,
+            "description": f"List favorable outcomes: rolls summing to {target}",
+            "expression": ", ".join(str(o) for o in favorable) if favorable else "none",
+        },
+        {
+            "step": 3,
+            "description": "Count favorable outcomes",
+            "expression": f"{fav_count} out of {total}",
+            "latex": f"\\frac{{{fav_count}}}{{{total}}}",
+        },
+        {
+            "step": 4,
+            "description": "Probability = favorable outcomes / total outcomes",
+            "expression": f"P = {fav_count}/{total} = {simplified} ≈ {decimal:.4f}",
+            "latex": f"P = \\frac{{{fav_count}}}{{{total}}} = {simplified} \\approx {decimal:.4f}",
+        },
+    ]
+    result["steps"] = steps
+    result["answer"] = f"{simplified} (≈ {decimal:.4f})"
+    result["latex_answer"] = f"P = \\frac{{{fav_count}}}{{{total}}} = {simplified}"
+    result["formulas_used"] = ["P(E) = favorable outcomes / total outcomes", "Sample space enumeration"]
+    result["common_mistakes"] = [
+        "Treating (a,b) and (b,a) as the same outcome when the dice are distinguishable",
+        "Miscounting how many ordered pairs give the target sum",
+    ]
+    return result
+
+
 def _solve_probability(problem: str, result: Dict) -> Dict:
+    dice_result = _solve_dice_probability(problem, result)
+    if dice_result is not None:
+        return dice_result
+
     steps = []
     p = problem.lower()
 
