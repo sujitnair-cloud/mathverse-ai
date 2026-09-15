@@ -489,14 +489,15 @@ def _get_gemini_keys() -> list:
 # ── Public API ─────────────────────────────────────────────────────────────────
 async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "intermediate", plan: str = "free") -> str:
     """
-    Return an explanation for a solved math problem.
-    Free-plan users receive the structured fallback (no LLM call, zero quota cost).
-    Student/Pro users get a full LLM explanation, cached 72 h.
+    Return an explanation for a solved math problem: a real LLM explanation
+    when a provider is configured, for every plan (product decision -- was
+    previously paid-plan-only, which meant every free/anonymous user got
+    the structured template regardless of whether an LLM key was even
+    configured, making "AI Explanation" not actually AI for most traffic).
+    Falls back to the structured template only on a genuine failure --
+    no provider configured, quota exhausted, or a request error -- never
+    leaving the user with nothing. Successful LLM responses are cached 72h.
     """
-    # Free users: return structured fallback immediately — no LLM cost
-    if plan not in ("student", "pro", "school"):
-        return _rich_fallback(problem, sympy_result, difficulty)
-
     cache_key = _ck(problem, difficulty)
     cached = _cache_get(_EXPL_CACHE, cache_key)
     if cached is not None:
