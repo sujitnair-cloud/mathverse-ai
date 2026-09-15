@@ -7,9 +7,11 @@ wrong or fabricated answer instead of erroring clearly, per the project's
 import math
 import unittest
 
+import sympy as sp
+
 from app.services.math_engine import (
     solve_expression, generate_function_points, is_llm_first_problem, looks_like_prose,
-    safe_parse, UnsafeExpressionError, detect_topic,
+    safe_parse, UnsafeExpressionError, detect_topic, preprocess_problem,
 )
 from app.services.graph_service import build_3d_surface, build_function_graph
 
@@ -279,6 +281,61 @@ class StepLatexTests(unittest.TestCase):
     def test_algebra_equation_steps_have_clean_latex(self):
         r = solve_expression("Solve: 2x + 3 = 11")
         self._assert_steps_have_clean_latex(r)
+
+
+class DefiniteIntegralTests(unittest.TestCase):
+    """
+    "2. Evaluate integral-sign-with-bounds x e^(x^2) dx." previously failed
+    end to end for three compounding reasons, each fixed here: (1) the
+    unicode integral sign was being deleted outright during normalization
+    instead of converted to a recognizable word, so topic detection lost
+    every trace this was an integral and misrouted it as "algebra_quadratic"
+    purely because "x**2" appears as a substring; (2) the integration
+    solver had no handling for definite-integral bounds at all, only ever
+    producing an indefinite "+ C" answer; (3) a leading list-numbering
+    marker ("2. ") prevented the natural-language prefix stripper from ever
+    matching, leaving "Evaluate" in the string to be flagged as prose.
+    """
+
+    def test_unicode_bounds_notation_solves_correctly(self):
+        r = solve_expression("Evaluate ∫₀¹ x e^(x²) dx.")
+        self.assertIsNone(r["error"])
+        self.assertEqual(sp.simplify(sp.sympify(r["answer"]) - sp.sympify("-1/2 + E/2")), 0)
+
+    def test_numbered_list_item_prefix_does_not_break_parsing(self):
+        r = solve_expression("2. Evaluate ∫₀¹ x e^(x²) dx.")
+        self.assertIsNone(r["error"])
+
+    def test_words_from_to_of_bounds_notation_solves_correctly(self):
+        r = solve_expression("Evaluate the integral from 0 to pi of sin(x) dx")
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["answer"], "2")
+
+    def test_topic_detection_is_not_fooled_by_x_squared_inside_an_integral(self):
+        topic = detect_topic(preprocess_problem("∫ x e^(x²) dx"))
+        self.assertEqual(topic, "calculus_integration")
+
+
+class EulersNumberTests(unittest.TestCase):
+    """A bare lowercase "e" had no special meaning to the parser -- it was
+    treated as an ordinary free symbol, so "e^(x^2)" integrated to a
+    nonsensical Piecewise case-split on the unknown "e" instead of the
+    correct closed form. Scientific notation ("1e-5") must keep working."""
+
+    def test_bare_e_is_eulers_number(self):
+        r = solve_expression("d/dx of e^x")
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["answer"], "exp(x)")
+
+    def test_scientific_notation_is_not_broken(self):
+        r = solve_expression("What is 1e-5 + 2")
+        self.assertIsNone(r["error"])
+        self.assertAlmostEqual(float(r["answer"]), 2.00001, places=6)
+
+    def test_decimal_number_is_not_mistaken_for_a_list_marker(self):
+        r = solve_expression("3.5 + 2")
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["answer"], "5.5")
 
 
 if __name__ == "__main__":

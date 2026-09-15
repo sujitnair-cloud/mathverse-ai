@@ -21,14 +21,20 @@ TRANSFORMATIONS = standard_transformations + (implicit_multiplication_applicatio
 # Unicode math symbol normalization map
 UNICODE_MAP = [
     # Superscripts → ** (must come before other replacements)
-    ("²", "**2"), ("³", "**3"), ("⁴", "**4"), ("⁵", "**5"),
-    ("⁶", "**6"), ("⁷", "**7"), ("⁸", "**8"), ("⁹", "**9"),
+    ("⁰", "**0"), ("¹", "**1"), ("²", "**2"), ("³", "**3"), ("⁴", "**4"),
+    ("⁵", "**5"), ("⁶", "**6"), ("⁷", "**7"), ("⁸", "**8"), ("⁹", "**9"),
     # Subscripts (often used in labels)
-    ("₀", "0"), ("₁", "1"), ("₂", "2"), ("₃", "3"),
+    ("₀", "0"), ("₁", "1"), ("₂", "2"), ("₃", "3"), ("₄", "4"),
+    ("₅", "5"), ("₆", "6"), ("₇", "7"), ("₈", "8"), ("₉", "9"),
     # Operators
     ("×", "*"), ("·", "*"), ("÷", "/"), ("−", "-"), ("–", "-"), ("—", "-"),
-    # Constants
-    ("π", "pi"), ("∞", "oo"), ("∫", ""),
+    # Constants. "∫" becomes the word "integral" (not deleted!) so that
+    # detect_topic()/the integration solver's keyword checks still see it —
+    # deleting it outright previously erased every trace that a problem was
+    # an integral, letting it fall through to unrelated topic heuristics
+    # (e.g. "∫ x e^(x²) dx" got misrouted as "algebra_quadratic" purely
+    # because "x**2" appears as a substring, once the ∫ itself was gone).
+    ("π", "pi"), ("∞", "oo"), ("∫", " integral "),
     # Roots
     ("√", "sqrt"),
     # Greek letters commonly used in math
@@ -39,6 +45,27 @@ UNICODE_MAP = [
     ("≤", "<="), ("≥", ">="), ("≠", "!="),
 ]
 
+_SUBSCRIPT_DIGITS = "₀₁₂₃₄₅₆₇₈₉"
+_SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+_SUB_TO_NUM = str.maketrans(_SUBSCRIPT_DIGITS, "0123456789")
+_SUP_TO_NUM = str.maketrans(_SUPERSCRIPT_DIGITS, "0123456789")
+# "∫₀¹ ... dx" — a bare integral sign immediately followed by a subscript
+# (lower bound) then a superscript (upper bound), the standard way a
+# definite integral is typeset. Must run BEFORE the generic superscript
+# UNICODE_MAP entries above, which would otherwise misread the upper bound
+# digit as an exponent (e.g. "∫₀¹" -> "0**1", losing the bounds entirely).
+_DEFINITE_INTEGRAL_RE = re.compile(
+    rf"∫\s*([{_SUBSCRIPT_DIGITS}]+)\s*([{_SUPERSCRIPT_DIGITS}]+)"
+)
+
+
+def _extract_definite_integral_bounds(s: str) -> str:
+    def _replace(m: "re.Match") -> str:
+        lower = m.group(1).translate(_SUB_TO_NUM)
+        upper = m.group(2).translate(_SUP_TO_NUM)
+        return f" integral from {lower} to {upper} of "
+    return _DEFINITE_INTEGRAL_RE.sub(_replace, s)
+
 
 def normalize_math_input(s: str) -> str:
     """
@@ -46,6 +73,7 @@ def normalize_math_input(s: str) -> str:
     directly into an equivalent form it can, so students don't have to write
     programming syntax. Shared by both the solver and the grapher.
     """
+    s = _extract_definite_integral_bounds(s)
     for uni, asc in UNICODE_MAP:
         s = s.replace(uni, asc)
     s = s.replace("^", "**")
@@ -57,6 +85,15 @@ def normalize_math_input(s: str) -> str:
     # non-nested argument (no inner parentheses), which covers the common
     # single-expression case.
     s = re.sub(r"log_(\w+)\(([^()]*)\)", r"log(\2, \1)", s)
+    # Standalone "e" -> Euler's number. Without this, SymPy's parser treats
+    # a bare "e" as an ordinary free symbol (e**(x**2) integrates to a
+    # nonsensical Piecewise case-split on the unknown "e" instead of the
+    # correct (E-1)/2-style closed form) -- it has no built-in notion that
+    # "e" commonly means Euler's number the way it already does for "pi".
+    # The negative lookbehind/lookahead avoid clobbering "e" inside a longer
+    # identifier (exp, expr, the) or scientific notation (1e-5, 2e10, where
+    # a digit immediately precedes the "e").
+    s = re.sub(r"(?<![0-9a-zA-Z_])e(?![a-zA-Z_])", "E", s)
     return s
 
 
@@ -69,13 +106,29 @@ def preprocess_problem(problem: str) -> str:
     p = problem.strip()
     # Strip trailing punctuation that has no math meaning
     p = re.sub(r"[.!?]+$", "", p).strip()
+    # Strip a leading list/question-numbering marker, e.g. "2. Evaluate ..."
+    # or "Q3) ...". Without this, "2. Evaluate ..." doesn't start with
+    # "evaluate" so the natural-language-prefix strip below never matches,
+    # leaving "Evaluate" in the string to later get flagged as prose.
+    # Requires whitespace then a letter after the marker (not just any
+    # character) so a genuine leading decimal like "3.5 + 2" is left alone.
+    p = re.sub(r"^\s*(?:q(?:uestion)?\s*)?\d+[\.\)]\s+(?=[A-Za-z])", "", p, flags=re.IGNORECASE).strip()
     # Apply Unicode normalization
     p = normalize_math_input(p)
     # Remove natural-language prefixes: "what is", "find", "calculate", etc.
-    p = re.sub(
-        r"^(what\s+is|find\s+the|find|calculate|compute|evaluate|determine|give\s+me|tell\s+me|solve\s+for|solve)\s+",
-        "", p, flags=re.IGNORECASE,
-    ).strip()
+    # Applied repeatedly (not just once) so a chain like "Evaluate the
+    # integral..." has both "Evaluate " and the leftover "the " stripped —
+    # a single pass left "the" dangling, which looks_like_prose() then
+    # correctly (but unhelpfully) flagged as English rather than math.
+    _prefix_re = re.compile(
+        r"^(what\s+is|find\s+the|find|calculate|compute|evaluate|determine|give\s+me|tell\s+me|solve\s+for|solve|the)\s+",
+        re.IGNORECASE,
+    )
+    while True:
+        new_p = _prefix_re.sub("", p).strip()
+        if new_p == p:
+            break
+        p = new_p
     # Add brackets to trig/log calls written without them: "sin 30" → "sin(30)"
     for fn in ["sin", "cos", "tan", "asin", "acos", "atan", "log", "ln", "sqrt", "exp"]:
         p = re.sub(rf"\b{fn}\s+([0-9a-zA-Z_]+(?:\.[0-9]+)?)\b", rf"{fn}(\1)", p, flags=re.IGNORECASE)
@@ -653,10 +706,25 @@ def _solve_local_extrema(problem: str, result: Dict) -> Dict:
     return result
 
 
+_DEFINITE_BOUNDS_RE = re.compile(r"integral\s+from\s+(.+?)\s+to\s+(.+?)\s+of\s+", re.IGNORECASE)
+
+
 def _solve_integration(problem: str, result: Dict) -> Dict:
     steps = []
     p = problem.lower().replace("^", "**")
-    for keyword in ["integrate", "integral of", "∫", "antiderivative of"]:
+
+    # Definite integral bounds, inserted as "integral from L to U of ..." by
+    # normalize_math_input()'s handling of "∫₀¹"-style notation. Must be
+    # pulled out before the generic keyword-strip below, which would
+    # otherwise leave a dangling "from 0 to 1" that looks_like_prose() then
+    # correctly (but unhelpfully) rejects as English.
+    lower_bound_str = upper_bound_str = None
+    bounds_match = _DEFINITE_BOUNDS_RE.search(p)
+    if bounds_match:
+        lower_bound_str, upper_bound_str = bounds_match.group(1).strip(), bounds_match.group(2).strip()
+        p = p[:bounds_match.start()] + p[bounds_match.end():]
+
+    for keyword in ["integrate", "integral of", "integral", "∫", "antiderivative of"]:
         p = p.replace(keyword, "").strip()
     # Remove dx at end
     p = re.sub(r"\s*d[a-z]\s*$", "", p).strip()
@@ -671,13 +739,37 @@ def _solve_integration(problem: str, result: Dict) -> Dict:
     x = _infer_variable(expr, problem)
     steps.append({"step": 1, "description": "Identify the integrand", "expression": str(expr), "latex": latex(expr)})
     steps.append({"step": 2, "description": "Apply integration rules", "expression": ""})
-    integral = integrate(expr, x)
-    steps.append({"step": 3, "description": "Compute indefinite integral", "expression": str(integral), "latex": latex(integral)})
-    steps.append({"step": 4, "description": "Add constant of integration C", "expression": f"{integral} + C", "latex": f"{latex(integral)} + C"})
+    antiderivative = integrate(expr, x)
+    steps.append({"step": 3, "description": "Compute the antiderivative", "expression": str(antiderivative), "latex": latex(antiderivative)})
+
+    if lower_bound_str is not None and upper_bound_str is not None:
+        try:
+            lo, hi = safe_parse(lower_bound_str), safe_parse(upper_bound_str)
+        except Exception:
+            lo = hi = None
+        if lo is not None and hi is not None:
+            definite_value = simplify(integrate(expr, (x, lo, hi)))
+            steps.append({
+                "step": 4,
+                "description": f"Evaluate from {x} = {lower_bound_str} to {x} = {upper_bound_str}",
+                "expression": f"[{antiderivative}] from {lower_bound_str} to {upper_bound_str} = {definite_value}",
+                "latex": f"\\Big[{latex(antiderivative)}\\Big]_{{{latex(lo)}}}^{{{latex(hi)}}} = {latex(definite_value)}",
+            })
+            result["steps"] = steps
+            result["answer"] = str(definite_value)
+            result["latex_answer"] = f"\\int_{{{latex(lo)}}}^{{{latex(hi)}}} {latex(expr)}\\, d{latex(x)} = {latex(definite_value)}"
+            result["formulas_used"] = ["Fundamental Theorem of Calculus: ∫ₐᵇ f(x) dx = F(b) - F(a)"]
+            result["common_mistakes"] = [
+                "Forgetting to evaluate at both bounds and subtract",
+                "Sign errors when substituting the lower bound",
+            ]
+            return result
+
+    steps.append({"step": 4, "description": "Add constant of integration C", "expression": f"{antiderivative} + C", "latex": f"{latex(antiderivative)} + C"})
 
     result["steps"] = steps
-    result["answer"] = f"{integral} + C"
-    result["latex_answer"] = f"\\int {latex(expr)}\\, d{latex(x)} = {latex(integral)} + C"
+    result["answer"] = f"{antiderivative} + C"
+    result["latex_answer"] = f"\\int {latex(expr)}\\, d{latex(x)} = {latex(antiderivative)} + C"
     result["formulas_used"] = ["Power Rule: ∫xⁿ dx = xⁿ⁺¹/(n+1) + C", "Substitution method"]
     result["common_mistakes"] = [
         "Forgetting the constant of integration C",
