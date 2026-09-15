@@ -31,19 +31,13 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.auth import require_user
 from app.models.models import User
+from app.api.routes.solve import PLAN_LIMITS  # single source of truth — see solve.py
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 
 PLAN_IDS = {
     "student": settings.CASHFREE_STUDENT_PLAN_ID,
     "pro":     settings.CASHFREE_PRO_PLAN_ID,
-}
-
-PLAN_LIMITS = {
-    "free":    10,
-    "student": 9999,
-    "pro":     9999,
-    "school":  9999,
 }
 
 TRIAL_DAYS = 2
@@ -94,11 +88,13 @@ async def get_config():
 
 @router.get("/status")
 async def get_status(current_user: User = Depends(require_user)):
+    # Lifetime, not daily -- matches the actual gate enforced in solve.py
+    # (total_solves vs. PLAN_LIMITS), not the daily_solves rolling stat.
     return {
         "plan": current_user.subscription_plan,
         "status": current_user.subscription_status,
-        "daily_solves_used": current_user.daily_solves or 0,
-        "daily_solves_limit": PLAN_LIMITS.get(current_user.subscription_plan, 10),
+        "solves_used": current_user.total_solves or 0,
+        "solves_limit": PLAN_LIMITS.get(current_user.subscription_plan, PLAN_LIMITS["free"]),
         "expires_at": current_user.subscription_expires_at,
     }
 

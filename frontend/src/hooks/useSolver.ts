@@ -21,7 +21,7 @@ export function useSolver() {
     } catch (err: unknown) {
       if (axios.isAxiosError(err) && err.response?.status === 429) {
         setLimitHit(true)
-        setError(err.response.data?.detail || 'Daily limit reached.')
+        setError(err.response.data?.detail || 'Free solve limit reached.')
       } else {
         const msg = err instanceof Error ? err.message : 'Failed to solve. Is the backend running?'
         setError(msg)

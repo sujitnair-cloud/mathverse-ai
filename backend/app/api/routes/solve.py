@@ -16,14 +16,21 @@ from app.services.llm_service import get_explanation, llm_full_solve
 
 router = APIRouter()
 
+# A one-time lifetime allowance for testing/trial use, not a daily-refreshing
+# quota: once used up, ever, the paywall prompt shows. Applies the same way
+# whether the user is anonymous (tracked by session_id) or signed in on the
+# free plan (tracked by total_solves) -- signing in doesn't grant a fresh
+# allowance, it just carries the same one to an account instead of a browser.
+FREE_LIFETIME_LIMIT = 20
+
 PLAN_LIMITS = {
-    "free":    10,
+    "free":    FREE_LIFETIME_LIMIT,
     "student": 9999,
     "pro":     9999,
     "school":  9999,
 }
 
-ANON_LIMIT = 6  # anonymous users get 6 solves ever, then must sign in
+ANON_LIMIT = FREE_LIFETIME_LIMIT
 
 
 class SolveRequest(BaseModel):
@@ -64,10 +71,14 @@ async def solve_problem(
 
     # ── Usage limit check ─────────────────────────────────────────────────────
     if current_user:
-        # Authenticated user — check daily plan limit
+        # Authenticated user
         plan = current_user.subscription_plan or "free"
-        limit = PLAN_LIMITS.get(plan, 10)
+        limit = PLAN_LIMITS.get(plan, FREE_LIFETIME_LIMIT)
 
+        # daily_solves/daily_solves_reset_at are kept only as a rolling
+        # activity stat (e.g. for an admin "today" view) -- they no longer
+        # gate anything. The actual free-tier gate is total_solves, a true
+        # lifetime count, checked below.
         now = datetime.now(timezone.utc)
         reset_at = current_user.daily_solves_reset_at
         if reset_at is not None and reset_at.tzinfo is None:
@@ -76,21 +87,23 @@ async def solve_problem(
             current_user.daily_solves = 0
             current_user.daily_solves_reset_at = now
 
-        used = current_user.daily_solves or 0
-        if used >= limit:
+        lifetime_used = current_user.total_solves or 0
+        if plan == "free" and lifetime_used >= limit:
             raise HTTPException(
                 status_code=429,
-                detail=f"You have used all {limit} free solves for today. Upgrade to Pro for unlimited access.",
+                detail=f"You've used all {limit} free solves. Upgrade to Pro for unlimited access.",
             )
 
-        current_user.daily_solves = used + 1
-        current_user.total_solves = (current_user.total_solves or 0) + 1
+        current_user.daily_solves = (current_user.daily_solves or 0) + 1
+        current_user.total_solves = lifetime_used + 1
         db.add(current_user)
-        solves_used = used + 1
+        solves_used = current_user.total_solves
         solves_limit = limit
 
     else:
-        # Anonymous user — limit by session_id
+        # Anonymous user — limit by session_id, lifetime (same allowance as
+        # signing in on the free plan gets, just tied to a browser instead
+        # of an account).
         session_id = req.session_id or "anonymous"
         count_result = await db.execute(
             select(func.count()).select_from(SolveHistory).where(
@@ -102,7 +115,7 @@ async def solve_problem(
         if anon_count >= ANON_LIMIT:
             raise HTTPException(
                 status_code=429,
-                detail=f"You have used {ANON_LIMIT} free solves. Sign in with Google for 10 free solves per day — it's free!",
+                detail=f"You've used all {ANON_LIMIT} free solves. Sign in with Google to keep your progress, or upgrade to Pro for unlimited access.",
             )
 
         solves_used = anon_count + 1
