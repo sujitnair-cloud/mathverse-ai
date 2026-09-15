@@ -245,5 +245,41 @@ class LocalExtremaTests(unittest.TestCase):
         self.assertEqual(r["answer"], "x = 3")
 
 
+class StepLatexTests(unittest.TestCase):
+    """
+    Every step's plain-text `expression` used Python/SymPy str() syntax
+    (e.g. "x**3 - 6*x**2 + 9*x + 1") with no way to render real exponents —
+    the raw "**" showed up literally in the UI instead of a superscript,
+    unlike a reference like ChatGPT's rendering. Steps now also carry a
+    `latex` field for KaTeX to render; this locks in that it's actually
+    present and free of leftover Python operator syntax, for every solver
+    that produces algebraic steps.
+    """
+
+    def _assert_steps_have_clean_latex(self, r):
+        self.assertIsNone(r["error"], r.get("error"))
+        latex_steps = [s for s in r["steps"] if s.get("latex")]
+        self.assertTrue(latex_steps, "expected at least one step with a latex field")
+        for s in latex_steps:
+            self.assertNotIn("**", s["latex"], s)
+            self.assertNotIn("*", s["latex"], s)  # SymPy's latex() uses \cdot / juxtaposition, not *
+
+    def test_local_extrema_steps_have_clean_latex(self):
+        r = solve_expression("If f(x) = x^3 - 6x^2 + 9x + 1, at which value of x does f have a local maximum?")
+        self._assert_steps_have_clean_latex(r)
+
+    def test_differentiation_steps_have_clean_latex(self):
+        r = solve_expression("d/dx of x^3 + 2x")
+        self._assert_steps_have_clean_latex(r)
+
+    def test_integration_steps_have_clean_latex(self):
+        r = solve_expression("integrate 3x^2")
+        self._assert_steps_have_clean_latex(r)
+
+    def test_algebra_equation_steps_have_clean_latex(self):
+        r = solve_expression("Solve: 2x + 3 = 11")
+        self._assert_steps_have_clean_latex(r)
+
+
 if __name__ == "__main__":
     unittest.main()

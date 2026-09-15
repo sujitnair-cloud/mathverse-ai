@@ -454,8 +454,15 @@ def _solve_algebra(problem: str, result: Dict) -> Dict:
             reject_unsafe_expression(rhs_str)
             lhs = parse_expr(lhs_str, local_dict=local_ns, transformations=TRANSFORMATIONS)
             rhs = parse_expr(rhs_str, local_dict=local_ns, transformations=TRANSFORMATIONS)
-            steps.append({"step": 1, "description": "Identify the equation", "expression": f"{lhs} = {rhs}"})
-            steps.append({"step": 2, "description": "Move all terms to one side", "expression": f"{lhs} - ({rhs}) = 0"})
+            steps.append({
+                "step": 1, "description": "Identify the equation",
+                "expression": f"{lhs} = {rhs}", "latex": f"{latex(lhs)} = {latex(rhs)}",
+            })
+            steps.append({
+                "step": 2, "description": "Move all terms to one side",
+                "expression": f"{lhs} - ({rhs}) = 0",
+                "latex": f"{latex(lhs)} - \\left({latex(rhs)}\\right) = 0",
+            })
             eq = Eq(lhs, rhs)
             free = eq.free_symbols
             x = symbols("x", real=True)
@@ -466,7 +473,10 @@ def _solve_algebra(problem: str, result: Dict) -> Dict:
             else:
                 var = x
             solution = solve(eq, var)
-            steps.append({"step": 3, "description": f"Solve for {var}", "expression": f"{var} = {solution}"})
+            steps.append({
+                "step": 3, "description": f"Solve for {var}",
+                "expression": f"{var} = {solution}", "latex": f"{latex(var)} = {latex(solution)}",
+            })
             result["answer"] = str(solution)
             result["latex_answer"] = f"{latex(var)} = {latex(solution)}"
             result["steps"] = steps
@@ -480,12 +490,12 @@ def _solve_algebra(problem: str, result: Dict) -> Dict:
 
     # Just simplify/evaluate
     expr = safe_parse(p)
-    steps.append({"step": 1, "description": "Parse the expression", "expression": str(expr)})
+    steps.append({"step": 1, "description": "Parse the expression", "expression": str(expr), "latex": latex(expr)})
     simplified = simplify(expr)
-    steps.append({"step": 2, "description": "Simplify", "expression": str(simplified)})
+    steps.append({"step": 2, "description": "Simplify", "expression": str(simplified), "latex": latex(simplified)})
     try:
         numeric = float(N(simplified))
-        steps.append({"step": 3, "description": "Numeric value", "expression": str(numeric)})
+        steps.append({"step": 3, "description": "Numeric value", "expression": str(numeric), "latex": str(numeric)})
         result["answer"] = str(numeric)
     except Exception:
         result["answer"] = str(simplified)
@@ -515,12 +525,12 @@ def _solve_differentiation(problem: str, result: Dict) -> Dict:
 
     expr = safe_parse(p)
     x = _infer_variable(expr, problem)
-    steps.append({"step": 1, "description": "Identify the function to differentiate", "expression": str(expr)})
+    steps.append({"step": 1, "description": "Identify the function to differentiate", "expression": str(expr), "latex": latex(expr)})
     steps.append({"step": 2, "description": "Apply differentiation rules (Power, Chain, Product, Quotient)", "expression": ""})
     derivative = diff(expr, x)
-    steps.append({"step": 3, "description": "Compute derivative", "expression": str(derivative)})
+    steps.append({"step": 3, "description": "Compute derivative", "expression": str(derivative), "latex": latex(derivative)})
     simplified_deriv = simplify(derivative)
-    steps.append({"step": 4, "description": "Simplify result", "expression": str(simplified_deriv)})
+    steps.append({"step": 4, "description": "Simplify result", "expression": str(simplified_deriv), "latex": latex(simplified_deriv)})
 
     result["steps"] = steps
     result["answer"] = str(simplified_deriv)
@@ -565,20 +575,36 @@ def _solve_local_extrema(problem: str, result: Dict) -> Dict:
 
     expr = safe_parse(expr_str)
     x = _infer_variable(expr, problem)
-    steps.append({"step": 1, "description": "Identify the function", "expression": f"f({x}) = {expr}"})
+    steps.append({
+        "step": 1, "description": "Identify the function",
+        "expression": f"f({x}) = {expr}", "latex": f"f({latex(x)}) = {latex(expr)}",
+    })
 
     first_deriv = simplify(diff(expr, x))
-    steps.append({"step": 2, "description": "Compute the first derivative", "expression": f"f'({x}) = {first_deriv}"})
+    steps.append({
+        "step": 2, "description": "Compute the first derivative",
+        "expression": f"f'({x}) = {first_deriv}", "latex": f"f'({latex(x)}) = {latex(first_deriv)}",
+    })
 
     critical_points = [cp for cp in solve(Eq(first_deriv, 0), x) if cp.is_real]
+    if critical_points:
+        step3_expr = f"{x} = " + ", ".join(str(cp) for cp in critical_points)
+        step3_latex = f"{latex(x)} = " + ", ".join(latex(cp) for cp in critical_points)
+    else:
+        step3_expr = "No real critical points"
+        step3_latex = None
     steps.append({
         "step": 3,
         "description": "Solve f'(x) = 0 for critical points",
-        "expression": f"{x} = " + ", ".join(str(cp) for cp in critical_points) if critical_points else "No real critical points",
+        "expression": step3_expr,
+        "latex": step3_latex,
     })
 
     second_deriv = simplify(diff(first_deriv, x))
-    steps.append({"step": 4, "description": "Compute the second derivative", "expression": f"f''({x}) = {second_deriv}"})
+    steps.append({
+        "step": 4, "description": "Compute the second derivative",
+        "expression": f"f''({x}) = {second_deriv}", "latex": f"f''({latex(x)}) = {latex(second_deriv)}",
+    })
 
     classified = []
     for cp in critical_points:
@@ -594,6 +620,7 @@ def _solve_local_extrema(problem: str, result: Dict) -> Dict:
             "step": len(steps) + 1,
             "description": f"Second derivative test at {x} = {cp}: f''({cp}) = {second_at_cp}",
             "expression": f"{x} = {cp} is a {kind}",
+            "latex": f"{latex(x)} = {latex(cp)} \\ \\text{{is a {kind}}}",
         })
 
     p_lower = problem.lower()
@@ -642,11 +669,11 @@ def _solve_integration(problem: str, result: Dict) -> Dict:
 
     expr = safe_parse(p)
     x = _infer_variable(expr, problem)
-    steps.append({"step": 1, "description": "Identify the integrand", "expression": str(expr)})
+    steps.append({"step": 1, "description": "Identify the integrand", "expression": str(expr), "latex": latex(expr)})
     steps.append({"step": 2, "description": "Apply integration rules", "expression": ""})
     integral = integrate(expr, x)
-    steps.append({"step": 3, "description": "Compute indefinite integral", "expression": str(integral)})
-    steps.append({"step": 4, "description": "Add constant of integration C", "expression": f"{integral} + C"})
+    steps.append({"step": 3, "description": "Compute indefinite integral", "expression": str(integral), "latex": latex(integral)})
+    steps.append({"step": 4, "description": "Add constant of integration C", "expression": f"{integral} + C", "latex": f"{latex(integral)} + C"})
 
     result["steps"] = steps
     result["answer"] = f"{integral} + C"
@@ -688,10 +715,14 @@ def _solve_limit(problem: str, result: Dict) -> Dict:
     except Exception:
         val = 0
 
-    steps.append({"step": 1, "description": "Identify the expression and limit point", "expression": f"lim({x}→{val}) {expr}"})
+    steps.append({
+        "step": 1, "description": "Identify the expression and limit point",
+        "expression": f"lim({x}→{val}) {expr}",
+        "latex": f"\\lim_{{{latex(x)} \\to {latex(val)}}} {latex(expr)}",
+    })
     steps.append({"step": 2, "description": "Check for direct substitution", "expression": ""})
     lim_val = limit(expr, x, val)
-    steps.append({"step": 3, "description": "Evaluate limit", "expression": str(lim_val)})
+    steps.append({"step": 3, "description": "Evaluate limit", "expression": str(lim_val), "latex": latex(lim_val)})
 
     result["steps"] = steps
     result["answer"] = str(lim_val)
@@ -716,12 +747,12 @@ def _solve_linear_algebra(problem: str, result: Dict) -> Dict:
                 row = [float(x.strip()) for x in row_str.split(",")]
                 rows.append(row)
             mat = Matrix(rows)
-            steps.append({"step": 2, "description": "Matrix formed", "expression": str(mat)})
+            steps.append({"step": 2, "description": "Matrix formed", "expression": str(mat), "latex": latex(mat)})
             d = det(mat)
-            steps.append({"step": 3, "description": "Determinant", "expression": str(d)})
+            steps.append({"step": 3, "description": "Determinant", "expression": str(d), "latex": latex(d)})
             if d != 0:
                 inv_mat = mat.inv()
-                steps.append({"step": 4, "description": "Inverse matrix", "expression": str(inv_mat)})
+                steps.append({"step": 4, "description": "Inverse matrix", "expression": str(inv_mat), "latex": latex(inv_mat)})
                 result["answer"] = f"det = {d}, inverse = {inv_mat}"
                 result["latex_answer"] = f"\\det(A) = {latex(d)}"
             else:
@@ -910,8 +941,12 @@ def _solve_trigonometry(problem: str, result: Dict) -> Dict:
                     simplified = simplify(val)
                     numeric_rad = float(N(simplified, 6))
                     numeric_deg = numeric_rad * 180 / float(pi)
-                    steps.append({"step": 2, "description": "Exact value (radians)", "expression": str(simplified)})
-                    steps.append({"step": 3, "description": "Decimal approximation", "expression": f"{numeric_rad:.6f} rad = {numeric_deg:.4f}°"})
+                    steps.append({"step": 2, "description": "Exact value (radians)", "expression": str(simplified), "latex": latex(simplified)})
+                    steps.append({
+                        "step": 3, "description": "Decimal approximation",
+                        "expression": f"{numeric_rad:.6f} rad = {numeric_deg:.4f}°",
+                        "latex": f"{numeric_rad:.6f}\\text{{ rad}} = {numeric_deg:.4f}^\\circ",
+                    })
                     result["answer"] = f"Exact: {simplified} rad, Decimal: {numeric_rad:.6f} rad ({numeric_deg:.4f}°)"
                     result["latex_answer"] = f"{fname}\\left({latex(x_val)}\\right) = {latex(simplified)} \\approx {numeric_rad:.6f}\\text{{ rad}}"
                     result["steps"] = steps
@@ -927,15 +962,18 @@ def _solve_trigonometry(problem: str, result: Dict) -> Dict:
                 # (e.g. sin(pi/6)).
                 if re.match(r"^\d+\.?\d*$", arg_str):
                     x_rad = x_val * pi / 180
-                    steps.append({"step": 1, "description": f"Convert {arg_str}° to radians", "expression": f"{arg_str}° = {latex(x_rad)}"})
+                    steps.append({
+                        "step": 1, "description": f"Convert {arg_str}° to radians",
+                        "expression": f"{arg_str}° = {x_rad}", "latex": f"{arg_str}^\\circ = {latex(x_rad)}",
+                    })
                 else:
                     x_rad = x_val
                     steps.append({"step": 1, "description": f"Evaluate {fname}({arg_str})", "expression": ""})
                 val = func(x_rad)
                 simplified = simplify(val)
                 numeric = float(N(simplified, 6))
-                steps.append({"step": 2, "description": "Exact value", "expression": str(simplified)})
-                steps.append({"step": 3, "description": "Decimal approximation", "expression": str(numeric)})
+                steps.append({"step": 2, "description": "Exact value", "expression": str(simplified), "latex": latex(simplified)})
+                steps.append({"step": 3, "description": "Decimal approximation", "expression": str(numeric), "latex": str(numeric)})
                 result["answer"] = f"Exact: {simplified}, Decimal: {numeric:.6f}"
                 result["latex_answer"] = f"{fname}\\left({latex(x_rad)}\\right) = {latex(simplified)} \\approx {numeric:.6f}"
                 result["steps"] = steps
@@ -975,8 +1013,8 @@ def _solve_trigonometry(problem: str, result: Dict) -> Dict:
             if expr.free_symbols:  # symbolic only — numeric cases were already tried above
                 simplified = trigsimp(simplify(expr))
                 if simplified != expr:
-                    steps.append({"step": 1, "description": "Original expression", "expression": str(expr)})
-                    steps.append({"step": 2, "description": "Apply trigonometric identities and simplify", "expression": str(simplified)})
+                    steps.append({"step": 1, "description": "Original expression", "expression": str(expr), "latex": latex(expr)})
+                    steps.append({"step": 2, "description": "Apply trigonometric identities and simplify", "expression": str(simplified), "latex": latex(simplified)})
                     result["answer"] = str(simplified)
                     result["latex_answer"] = f"{latex(expr)} = {latex(simplified)}"
                     result["steps"] = steps
