@@ -1,3 +1,5 @@
+import { InlineMath } from 'react-katex'
+import 'katex/dist/katex.min.css'
 import type { SolveStep } from '../types'
 
 interface Props {
@@ -21,9 +23,16 @@ export default function StepDisplay({ steps }: Props) {
           <div className="flex-1 min-w-0">
             <p className="text-slate-300 text-sm">{step.description}</p>
             {step.expression && (
-              <code className="mt-1 block px-3 py-1.5 bg-slate-800 rounded-lg text-indigo-200 font-mono text-sm overflow-x-auto border border-slate-700">
-                {step.expression}
-              </code>
+              <div className="mt-1 px-3 py-1.5 bg-slate-800 rounded-lg text-indigo-200 text-sm overflow-x-auto border border-slate-700">
+                {step.latex ? (
+                  // Falls back to the raw plain-text expression if this
+                  // particular LaTeX string fails to parse, rather than
+                  // crashing the step list over one malformed step.
+                  <InlineMath math={step.latex} renderError={() => <code className="font-mono">{step.expression}</code>} />
+                ) : (
+                  <code className="font-mono">{step.expression}</code>
+                )}
+              </div>
             )}
           </div>
         </div>

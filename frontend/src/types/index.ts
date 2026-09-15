@@ -2,6 +2,7 @@ export interface SolveStep {
   step: number
   description: string
   expression: string
+  latex?: string | null
 }
 
 export interface SolveResult {

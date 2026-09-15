@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { useSolver } from '../hooks/useSolver'
 import StepDisplay from '../components/StepDisplay'
+import { BlockMath } from 'react-katex'
+import 'katex/dist/katex.min.css'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { Calculator, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronUp, BookOpen, AlertTriangle, Lightbulb, LogIn, Zap } from 'lucide-react'
@@ -265,7 +267,16 @@ export default function Solver() {
             {/* Answer */}
             <div className="bg-indigo-900/30 border border-indigo-500/30 rounded-xl p-4">
               <p className="text-slate-400 text-xs mb-2">Answer</p>
-              <p className="text-indigo-200 font-mono text-lg font-semibold break-all">{result.answer}</p>
+              {result.latex_answer ? (
+                <div className="text-indigo-200 text-lg font-semibold overflow-x-auto">
+                  <BlockMath
+                    math={result.latex_answer}
+                    renderError={() => <p className="font-mono break-all">{result.answer}</p>}
+                  />
+                </div>
+              ) : (
+                <p className="text-indigo-200 font-mono text-lg font-semibold break-all">{result.answer}</p>
+              )}
             </div>
 
             {result.error && (
