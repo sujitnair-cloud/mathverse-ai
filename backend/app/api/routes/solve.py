@@ -156,7 +156,17 @@ async def solve_problem(
                     "Upgrade to unlock full AI solving."
                 )
     else:
-        # Standard path: SymPy first, LLM fallback only for paid users
+        # Standard path: SymPy first, LLM fallback for everyone when it fails.
+        # A structured-solver gap (misrouted topic, unhandled notation, etc.)
+        # previously meant a dead-end error with no answer for free/anon
+        # users, even for problems well within SymPy's real capability that
+        # just hit a pipeline bug -- paywalling that fallback made every such
+        # bug user-facing for the majority of users instead of invisible.
+        # Existing per-request/per-day solve-count limits above still cap
+        # usage; this only changes which backend answers an already-allowed
+        # request. The separate "word problems require a paid plan" fallback
+        # above (is_llm_first_problem) is a distinct, deliberate paid
+        # feature for problems that bypass SymPy entirely and is unaffected.
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, solve_expression, req.problem)
 
@@ -167,7 +177,7 @@ async def solve_problem(
             answer_str.startswith("Please ") or
             answer_str.startswith("See steps")
         )
-        if sympy_failed and is_paid:
+        if sympy_failed:
             llm_result = await llm_full_solve(req.problem, explanation_level)
             if llm_result and llm_result.get("_quota_exceeded"):
                 result["error"] = "Daily AI quota reached. Quota resets at midnight UTC."
