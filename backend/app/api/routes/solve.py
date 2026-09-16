@@ -21,7 +21,9 @@ router = APIRouter()
 # whether the user is anonymous (tracked by session_id) or signed in on the
 # free plan (tracked by total_solves) -- signing in doesn't grant a fresh
 # allowance, it just carries the same one to an account instead of a browser.
-FREE_LIFETIME_LIMIT = 20
+# Raised from 20 to 50 for the trial-circulation period while the app is
+# still being finished; revisit once it's fully ready.
+FREE_LIFETIME_LIMIT = 50
 
 PLAN_LIMITS = {
     "free":    FREE_LIFETIME_LIMIT,
