@@ -586,8 +586,15 @@ async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "i
     if result_text is None:
         result_text = _rich_fallback(problem, sympy_result, difficulty)
 
-    # Cache successful full LLM responses (not quota-notice fallbacks)
-    if "Quota resets at midnight UTC" not in result_text:
+    # Cache only successful full LLM responses -- not a quota notice, and not
+    # a genuine call failure either ("*LLM error: ...*", appended by every
+    # except-Exception branch above). Caching a transient failure for 72h
+    # meant a fixed underlying bug (e.g. the Gemini model-list going stale)
+    # kept serving the old cached failure for that exact problem text long
+    # after the real fix was deployed -- confirmed directly: a previously-
+    # asked problem kept failing after a fix that a brand-new problem text
+    # picked up immediately.
+    if "Quota resets at midnight UTC" not in result_text and "*LLM error:" not in result_text:
         _cache_set(_EXPL_CACHE, cache_key, result_text)
 
     return result_text

@@ -45,6 +45,29 @@ class FreeUsersGetRealLLMExplanationTests(unittest.IsolatedAsyncioTestCase):
         # The rich fallback is a real, complete explanation, not empty/an error.
         self.assertTrue(len(result) > 20)
 
+    async def test_a_genuine_call_failure_is_not_cached(self):
+        """
+        A transient/genuine LLM call failure was previously cached for 72h
+        just like a real success -- confirmed directly in production: after
+        fixing a real underlying bug (Gemini's model list going stale), a
+        previously-asked problem kept serving the old cached failure while a
+        brand-new problem text picked up the fix immediately. The failure
+        path must never populate the cache.
+        """
+        problem = "unique_probe_problem_failure_not_cached_test"
+        with patch.object(llm_service.settings, "LLM_PROVIDER", "gemini"), \
+             patch.object(llm_service.settings, "GEMINI_API_KEY", "AIzaSy" + "x" * 33), \
+             patch.object(llm_service, "_call_gemini", side_effect=RuntimeError("transient failure")):
+            first = await llm_service.get_explanation(problem, {"answer": "4"}, "intermediate", plan="free")
+        self.assertIn("*LLM error:", first)
+
+        with patch.object(llm_service.settings, "LLM_PROVIDER", "gemini"), \
+             patch.object(llm_service.settings, "GEMINI_API_KEY", "AIzaSy" + "x" * 33), \
+             patch.object(llm_service, "_call_gemini", return_value="the fix landed") as mock_call:
+            second = await llm_service.get_explanation(problem, {"answer": "4"}, "intermediate", plan="free")
+        mock_call.assert_called_once()  # proves the second call wasn't served from a stale cache
+        self.assertEqual(second, "the fix landed")
+
 
 if __name__ == "__main__":
     unittest.main()
