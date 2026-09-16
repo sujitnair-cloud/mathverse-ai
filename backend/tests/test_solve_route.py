@@ -67,6 +67,35 @@ class LLMFallbackAvailableToFreeUsersTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(body["error"])
         mock_llm.assert_called_once()
 
+    async def test_anonymous_user_gets_real_llm_answer_for_a_word_problem_not_a_paywall(self):
+        """
+        "Solve the differential equation dy/dx = 3x^2 given y=2 when x=0"
+        matches _EXPERT_KEYWORDS ("differential equation") and routes through
+        is_llm_first_problem(). Free/anonymous users previously got the
+        SymPy-only path there (no real handling for differential equations)
+        and, whenever that predictably failed, a "requires Student or Pro
+        plan" error -- even though a real answer could still slip through
+        via the separate "extract Final Answer from explanation" fallback,
+        showing a correct answer and a paywall error at the same time. Now
+        attempts a real LLM answer for everyone, same as the other fallback
+        paths.
+        """
+        llm_result = {
+            "answer": "y = x**3 + 2", "latex_answer": "y = x^3 + 2", "steps": [],
+            "explanation": "fixture", "formulas_used": [], "common_mistakes": [], "similar_problems": [],
+        }
+        with patch("app.api.routes.solve.llm_full_solve", return_value=llm_result) as mock_llm, \
+             patch("app.api.routes.solve.get_explanation", return_value=None):
+            resp = self.client.post("/api/v1/solve", json={
+                "problem": "Solve the differential equation dy/dx = 3x^2 given y=2 when x=0",
+                "session_id": "sess_test_anon_diffeq",
+            })
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["answer"], "y = x**3 + 2")
+        self.assertIsNone(body["error"])
+        mock_llm.assert_called_once()
+
 
 class LifetimeFreeLimitTests(unittest.IsolatedAsyncioTestCase):
     """

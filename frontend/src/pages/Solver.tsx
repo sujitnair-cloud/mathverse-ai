@@ -6,6 +6,8 @@ import UpgradeModal from '../components/UpgradeModal'
 import { BlockMath } from 'react-katex'
 import 'katex/dist/katex.min.css'
 import ReactMarkdown from 'react-markdown'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
 import type { Components } from 'react-markdown'
 import { Calculator, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronUp, BookOpen, AlertTriangle, Lightbulb } from 'lucide-react'
 import type { Difficulty } from '../types'
@@ -317,7 +319,11 @@ export default function Solver() {
 
               {showExplanation && (
                 <div className="border-t border-slate-700/50 px-5 pb-5 pt-1">
-                  <ReactMarkdown components={mdComponents}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={mdComponents}
+                  >
                     {result.explanation}
                   </ReactMarkdown>
                 </div>

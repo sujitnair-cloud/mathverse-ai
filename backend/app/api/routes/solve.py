@@ -127,9 +127,7 @@ async def solve_problem(
     detected_difficulty = auto_detect_difficulty(req.problem)
     explanation_level = req.difficulty or detected_difficulty
 
-    # Determine if the user has a paid plan (Student / Pro / School)
     user_plan = (current_user.subscription_plan if current_user else None) or "free"
-    is_paid = user_plan in ("student", "pro", "school")
 
     explanation = None
     result: dict = {
@@ -147,29 +145,30 @@ async def solve_problem(
     }
 
     if is_llm_first_problem(req.problem):
-        if is_paid:
-            # Word problem / proof → LLM for paid users
-            llm_result = await llm_full_solve(req.problem, explanation_level)
-            if llm_result and llm_result.get("_quota_exceeded"):
-                result["error"] = (
-                    "Daily AI quota reached. Your question will be answered via the structured solver. "
-                    "Quota resets at midnight UTC."
-                )
-            elif llm_result:
-                explanation = llm_result.pop("explanation", None)
-                result.update(llm_result)
-            else:
-                loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(None, solve_expression, req.problem)
+        # Word problem / proof / advanced request -- for everyone now, not
+        # just paid plans. Previously free/anonymous users only ever got the
+        # structured (SymPy) solver here, which has no real handling for this
+        # category (word problems, proofs) by design, then bolted on a
+        # "requires Student or Pro" error whenever that predictably failed --
+        # confusingly, this could still show a real, correct answer alongside
+        # that same paywall error, because get_explanation() (unrestricted by
+        # plan since an earlier fix) sometimes yielded an answer via the
+        # separate "extract Final Answer from the explanation" fallback below
+        # even while this block was independently reporting failure. The
+        # monetization lever is the solve-count limit above, not gating
+        # which categories of problem get a real attempt.
+        llm_result = await llm_full_solve(req.problem, explanation_level)
+        if llm_result and llm_result.get("_quota_exceeded"):
+            result["error"] = (
+                "Daily AI quota reached. Your question will be answered via the structured solver. "
+                "Quota resets at midnight UTC."
+            )
+        elif llm_result:
+            explanation = llm_result.pop("explanation", None)
+            result.update(llm_result)
         else:
-            # Free users: SymPy only for word problems
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, solve_expression, req.problem)
-            if not result.get("answer") or str(result.get("answer", "")).startswith("See steps"):
-                result["error"] = (
-                    "Word problems and applied questions require a Student or Pro plan. "
-                    "Upgrade to unlock full AI solving."
-                )
     else:
         # Standard path: SymPy first, LLM fallback for everyone when it fails.
         # A structured-solver gap (misrouted topic, unhandled notation, etc.)
@@ -179,9 +178,7 @@ async def solve_problem(
         # bug user-facing for the majority of users instead of invisible.
         # Existing per-request/per-day solve-count limits above still cap
         # usage; this only changes which backend answers an already-allowed
-        # request. The separate "word problems require a paid plan" fallback
-        # above (is_llm_first_problem) is a distinct, deliberate paid
-        # feature for problems that bypass SymPy entirely and is unaffected.
+        # request.
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, solve_expression, req.problem)
 
