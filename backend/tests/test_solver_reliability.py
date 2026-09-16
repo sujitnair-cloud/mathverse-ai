@@ -366,5 +366,40 @@ class DiceProbabilityTests(unittest.TestCase):
         self.assertEqual(r["answer"], "120")
 
 
+class InverseTrigDerivativeNotationTests(unittest.TestCase):
+    """
+    "8. If y = sin⁻¹(x), what is dy/dx for |x|<1?" was misrouted to
+    "trigonometry" (which has no notion of derivatives) for two compounding
+    reasons: the superscript "⁻¹" (meaning "inverse", i.e. arcsin)
+    got mangled into "-**1" by the generic superscript-to-power handling
+    before anyone could recognize it, and "dy/dx" wasn't recognized as
+    derivative notation at all since only the literal string "d/dx" was
+    checked. That sent it into the (much slower) LLM fallback path as the
+    only way to get any answer at all, for a question well within the fast,
+    deterministic differentiation solver's real capability.
+    """
+
+    def test_inverse_sin_superscript_notation_routes_to_differentiation(self):
+        topic = detect_topic(preprocess_problem("If y = sin⁻¹(x), what is dy/dx for |x|<1?"))
+        self.assertEqual(topic, "calculus_differentiation")
+
+    def test_inverse_sin_derivative_solves_correctly_and_fast(self):
+        import time
+        start = time.time()
+        r = solve_expression("8. If y = sin⁻¹(x), what is dy/dx for |x|<1?")
+        elapsed = time.time() - start
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["answer"], "1/sqrt(1 - x**2)")
+        self.assertLess(elapsed, 5, "should resolve via the fast structured solver, not an LLM round trip")
+
+    def test_leibniz_notation_with_a_real_variable_name_is_recognized(self):
+        # Not just the literal "d/dx" -- any dependent/independent variable pair.
+        self.assertEqual(detect_topic("what is dV/dt if V = t^3"), "calculus_differentiation")
+
+    def test_inverse_cos_and_tan_superscript_notation_also_convert(self):
+        self.assertIn("acos", preprocess_problem("cos⁻¹(x)"))
+        self.assertIn("atan", preprocess_problem("tan⁻¹(x)"))
+
+
 if __name__ == "__main__":
     unittest.main()

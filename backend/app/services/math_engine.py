@@ -67,12 +67,32 @@ def _extract_definite_integral_bounds(s: str) -> str:
     return _DEFINITE_INTEGRAL_RE.sub(_replace, s)
 
 
+_INVERSE_TRIG_SUPERSCRIPT_RE = re.compile(r"\b(sin|cos|tan|sinh|cosh|tanh)⁻¹\b", re.IGNORECASE)
+_INVERSE_TRIG_REPLACEMENTS = {"sin": "asin", "cos": "acos", "tan": "atan", "sinh": "asinh", "cosh": "acosh", "tanh": "atanh"}
+
+
+def _convert_inverse_trig_superscript(s: str) -> str:
+    """
+    "sin⁻¹(x)" means arcsin(x) by strong, universal convention -- never
+    "1/sin(x)" (that's written "(sin x)⁻¹" or "1/sin(x)" instead). Must run
+    before the generic superscript UNICODE_MAP entries, which would
+    otherwise mangle "⁻¹" into "-**1" (e.g. "sin⁻¹(x)" -> "sin-**1(x)",
+    unparseable garbage that fell through to the wrong topic entirely and
+    from there into a slow, unnecessary LLM-fallback round trip instead of
+    the fast, deterministic differentiation solver).
+    """
+    return _INVERSE_TRIG_SUPERSCRIPT_RE.sub(
+        lambda m: _INVERSE_TRIG_REPLACEMENTS[m.group(1).lower()], s
+    )
+
+
 def normalize_math_input(s: str) -> str:
     """
     Convert common mathematical notation that SymPy's parser can't read
     directly into an equivalent form it can, so students don't have to write
     programming syntax. Shared by both the solver and the grapher.
     """
+    s = _convert_inverse_trig_superscript(s)
     s = _extract_definite_integral_bounds(s)
     for uni, asc in UNICODE_MAP:
         s = s.replace(uni, asc)
@@ -297,7 +317,10 @@ def _infer_variable(expr: Any, problem: str, default_name: str = "x") -> Any:
     """
     m = re.search(r"with\s+respect\s+to\s+([a-zA-Z])\b", problem, re.IGNORECASE)
     if not m:
-        m = re.search(r"\bd\s*/\s*d([a-zA-Z])\b", problem, re.IGNORECASE)
+        # d/dx (bare numerator) as well as full Leibniz notation dy/dx,
+        # dV/dt, etc. -- a bare "d/d<var>" pattern alone missed any problem
+        # phrased as "dy/dx" rather than literally "d/dx".
+        m = re.search(r"\bd[a-zA-Z]?\s*/\s*d([a-zA-Z])\b", problem, re.IGNORECASE)
     if not m:
         # Leibniz integral notation: "... x^2 dx" / "... t^2 dt"
         m = re.search(r"\bd([a-zA-Z])\s*$", problem.strip(), re.IGNORECASE)
@@ -324,7 +347,14 @@ def detect_topic(problem: str) -> str:
     p = problem.lower()
     if any(k in p for k in ["integral", "integrate", "antiderivative"]) or "∫" in p:
         return "calculus_integration"
-    if any(k in p for k in ["derivative", "differentiate", "d/dx"]):
+    # Leibniz notation matches "d/dx" (bare numerator) as well as the far
+    # more common dy/dx, dV/dt, etc. -- checking only the literal string
+    # "d/dx" missed every problem phrased with a real dependent-variable
+    # name, sending it into unrelated topic checks below instead (e.g. "If
+    # y = sin⁻¹(x), what is dy/dx" fell through all the way to trigonometry,
+    # which has no notion of derivatives at all).
+    if (any(k in p for k in ["derivative", "differentiate"])
+            or re.search(r"\bd[a-z]?\s*/\s*d[a-z]\b", p)):
         return "calculus_differentiation"
     # Finding a local max/min, extremum, or inflection point requires taking
     # a derivative even when the problem never says "derivative"/"d/dx" —
@@ -563,12 +593,23 @@ def _solve_differentiation(problem: str, result: Dict) -> Dict:
     steps = []
     p = problem.replace("^", "**")
     # Remove instruction words, keep only the math expression
+    matched_keyword = False
     for keyword in ["d/dx of", "d/dx", "differentiate", "derivative of", "find the derivative of", "find derivative of"]:
         low = p.lower()
         idx = low.find(keyword)
         if idx != -1:
             p = p[idx + len(keyword):].strip()
+            matched_keyword = True
             break
+    if not matched_keyword:
+        # Phrasing like "If y = sin⁻¹(x), what is dy/dx for |x|<1?" defines
+        # the function via "y = ..." rather than issuing a bare "derivative
+        # of ..." instruction, so there's no instruction keyword to strip at
+        # all -- extract the definition itself, same as the local-extrema
+        # solver does for "f(x) = ...".
+        extracted = _extract_function_expr(problem)
+        if extracted != problem:
+            p = extracted.replace("^", "**")
     p = _strip_wrapping_parens(p)
 
     if looks_like_prose(p):
