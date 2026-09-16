@@ -353,6 +353,46 @@ async def _call_openai(prompt: str, max_tokens: int = 1024) -> str:
 
 
 
+async def _list_gemini_models(client: httpx.AsyncClient, api_key: str) -> list:
+    """
+    Query Gemini's own model catalog instead of relying only on a hardcoded
+    name list -- confirmed directly: "gemini-2.0-flash" and
+    "gemini-2.0-flash-lite", both previously hardcoded as fallbacks here,
+    have since been shut down by Google. A hardcoded list will always go
+    stale eventually; asking the API what's actually available right now
+    doesn't. Returns generateContent-capable model names (without the
+    "models/" prefix), cheaper/faster "flash" models first, preview/
+    experimental ones last. Returns [] on any failure (invalid key, network
+    error) so the caller can fall back to the hardcoded guesses.
+    """
+    import sys
+    try:
+        resp = await client.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": api_key},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[MathVerse] Gemini ListModels failed (will use hardcoded fallback list): {e}", file=sys.stderr)
+        return []
+
+    names = []
+    for m in data.get("models", []):
+        if "generateContent" not in m.get("supportedGenerationMethods", []):
+            continue
+        name = m.get("name", "")
+        if name.startswith("models/"):
+            name = name[len("models/"):]
+        if name:
+            names.append(name)
+
+    def _sort_key(name: str) -> tuple:
+        return ("preview" in name or "exp" in name, "flash" not in name)
+
+    return sorted(dict.fromkeys(names), key=_sort_key)
+
+
 async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
     import sys
     api_keys = _get_gemini_keys()
@@ -363,13 +403,12 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
-    models_to_try = list(dict.fromkeys([
+    hardcoded_models = [
         "gemini-2.5-flash-lite",
         settings.GEMINI_MODEL,
         "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-    ]))
+        "gemini-2.5-pro",
+    ]
     api_versions = ["v1beta", "v1"]
 
     async with httpx.AsyncClient(timeout=60) as client:
@@ -379,6 +418,9 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
         for key_idx, api_key in enumerate(api_keys):
             key_label = f"key#{key_idx + 1}/{len(api_keys)}"
             quota_hit = False
+
+            discovered = await _list_gemini_models(client, api_key)
+            models_to_try = list(dict.fromkeys(discovered + hardcoded_models))
 
             for model in models_to_try:
                 if quota_hit:
