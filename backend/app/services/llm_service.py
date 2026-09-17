@@ -393,15 +393,36 @@ async def _list_gemini_models(client: httpx.AsyncClient, api_key: str) -> list:
     return sorted(dict.fromkeys(names), key=_sort_key)
 
 
+# Remembers whichever (api_key, model, api_version, auth_style) last
+# actually worked so subsequent calls try it first instead of re-searching
+# every combination from scratch every time -- confirmed directly that the
+# full search burned through the free-tier daily quota fast once the
+# tool-calling loop started making several Gemini calls per solve instead
+# of one. Reset to None whenever the cached combo stops working, so a
+# genuine change (e.g. Google deprecating a model) still gets rediscovered.
+_LAST_GOOD_GEMINI_COMBO: Optional[tuple] = None
+
+
+def _gemini_request(api_key: str, model: str, api_ver: str, auth_style: str) -> tuple:
+    base_url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{model}:generateContent"
+    if auth_style == "query":
+        return f"{base_url}?key={api_key}", {}
+    if auth_style == "bearer":
+        return base_url, {"Authorization": f"Bearer {api_key}"}
+    return base_url, {"x-goog-api-key": api_key}
+
+
 async def _gemini_generate(contents: list, tools: Optional[list] = None, max_tokens: int = 1024) -> dict:
     """
     Low-level Gemini call shared by both the plain-text path (_call_gemini)
     and the tool-calling path (_call_gemini_with_tools) -- returns the raw
     parsed response body so a caller can inspect it for either a text part
-    or a functionCall part. Tries every discovered/hardcoded model across
-    both API versions and all three known auth styles until one responds.
+    or a functionCall part. Tries the last-known-working combo first; only
+    falls back to the full discovered/hardcoded-model x version x auth-style
+    search if that's unavailable or has stopped working.
     """
     import sys
+    global _LAST_GOOD_GEMINI_COMBO
     api_keys = _get_gemini_keys()
     if not api_keys:
         raise RuntimeError("No Gemini API key configured")
@@ -421,6 +442,19 @@ async def _gemini_generate(contents: list, tools: Optional[list] = None, max_tok
     api_versions = ["v1beta", "v1"]
 
     async with httpx.AsyncClient(timeout=60) as client:
+        if _LAST_GOOD_GEMINI_COMBO and _LAST_GOOD_GEMINI_COMBO[0] in api_keys:
+            api_key, model, api_ver, auth_style = _LAST_GOOD_GEMINI_COMBO
+            url, headers = _gemini_request(api_key, model, api_ver, auth_style)
+            try:
+                resp = await client.post(url, json=payload, headers=headers)
+                if resp.status_code == 200:
+                    print(f"[MathVerse] Gemini REST success (cached combo): {model} ({api_ver}/{auth_style})", file=sys.stderr)
+                    return resp.json()
+                print(f"[MathVerse] Cached Gemini combo stopped working (HTTP {resp.status_code}); re-searching", file=sys.stderr)
+            except Exception as e:
+                print(f"[MathVerse] Cached Gemini combo failed ({e}); re-searching", file=sys.stderr)
+            _LAST_GOOD_GEMINI_COMBO = None
+
         last_err: Exception = RuntimeError("No Gemini model responded successfully")
         exhausted_key_count = 0
 
@@ -437,18 +471,11 @@ async def _gemini_generate(contents: list, tools: Optional[list] = None, max_tok
                 for api_ver in api_versions:
                     if quota_hit:
                         break
-                    base_url = (f"https://generativelanguage.googleapis.com/{api_ver}/models/"
-                                f"{model}:generateContent")
-                    auth_variants = [
-                        (base_url, {"x-goog-api-key": api_key}),
-                        (f"{base_url}?key={api_key}", {}),
-                        (base_url, {"Authorization": f"Bearer {api_key}"}),
-                    ]
-                    for url, extra_headers in auth_variants:
-                        auth_label = list(extra_headers.keys())[0] if extra_headers else "query-param"
+                    for auth_style in ("header", "query", "bearer"):
+                        url, extra_headers = _gemini_request(api_key, model, api_ver, auth_style)
                         try:
                             resp = await client.post(url, json=payload, headers=extra_headers)
-                            print(f"[MathVerse] {key_label} {model}/{api_ver}/{auth_label} → HTTP {resp.status_code}", file=sys.stderr)
+                            print(f"[MathVerse] {key_label} {model}/{api_ver}/{auth_style} → HTTP {resp.status_code}", file=sys.stderr)
                             if resp.status_code == 404:
                                 break
                             if resp.status_code in (400, 401, 403):
@@ -460,7 +487,8 @@ async def _gemini_generate(contents: list, tools: Optional[list] = None, max_tok
                                 break
                             resp.raise_for_status()
                             body = resp.json()
-                            print(f"[MathVerse] Gemini REST success: {key_label} {model} ({api_ver})", file=sys.stderr)
+                            print(f"[MathVerse] Gemini REST success: {key_label} {model} ({api_ver}/{auth_style})", file=sys.stderr)
+                            _LAST_GOOD_GEMINI_COMBO = (api_key, model, api_ver, auth_style)
                             return body
                         except Exception as e:
                             last_err = e
