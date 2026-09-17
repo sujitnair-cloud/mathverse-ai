@@ -47,7 +47,7 @@ export default function About() {
           <span className="bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">SymPy Math Engine</span>
           <span className="bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">Tailwind CSS</span>
           <span className="bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">SQLite → PostgreSQL</span>
-          <span className="bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">Claude / GPT-4 / Gemini</span>
+          <span className="bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">AI-Powered Reasoning</span>
         </div>
       </div>
     </div>

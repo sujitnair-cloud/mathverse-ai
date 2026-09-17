@@ -157,21 +157,65 @@ class GeminiToolsIsThePrimaryPathTests(unittest.IsolatedAsyncioTestCase):
         mock_tools.assert_called_once()
         mock_sympy.assert_not_called()
 
-    async def test_quota_exceeded_falls_back_to_the_structured_solver_with_a_note(self):
+    async def test_obviously_simple_input_skips_the_llm_round_trip_entirely(self):
+        """
+        Every solve now costs a multi-second LLM round trip by default --
+        acceptable for handling any phrasing, but wasteful for something
+        with zero ambiguity to begin with. A short input with no natural-
+        language content at all skips solve_with_gemini_tools entirely and
+        goes straight to the free, instant structured solver.
+        """
         sympy_result = {
-            "problem": "2+2", "topic": "algebra_general", "difficulty": "basic",
+            "problem": "2 + 2", "topic": "algebra_general", "difficulty": "basic",
             "steps": [], "answer": "4", "latex_answer": "4", "alternate_method": None,
             "formulas_used": [], "common_mistakes": [], "similar_problems": [], "error": None,
+        }
+        with patch("app.api.routes.solve.solve_with_gemini_tools") as mock_tools, \
+             patch("app.api.routes.solve.solve_expression", return_value=sympy_result) as mock_sympy, \
+             patch("app.api.routes.solve.get_explanation", return_value=None):
+            resp = self.client.post("/api/v1/solve", json={
+                "problem": "2 + 2", "session_id": "sess_test_fast_path",
+            })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["answer"], "4")
+        mock_tools.assert_not_called()
+        mock_sympy.assert_called_once()
+
+    async def test_ambiguous_looking_input_still_uses_the_llm_round_trip(self):
+        # Contrast case: anything with real natural-language content still
+        # goes through the primary path, even if fairly short.
+        with patch("app.api.routes.solve.solve_with_gemini_tools", return_value=None) as mock_tools, \
+             patch("app.api.routes.solve.solve_expression", return_value={
+                 "problem": "x", "topic": "algebra_general", "difficulty": "basic", "steps": [],
+                 "answer": "4", "latex_answer": "4", "alternate_method": None, "formulas_used": [],
+                 "common_mistakes": [], "similar_problems": [], "error": None,
+             }), \
+             patch("app.api.routes.solve.get_explanation", return_value=None):
+            self.client.post("/api/v1/solve", json={
+                "problem": "What is two plus two?", "session_id": "sess_test_not_fast_path",
+            })
+        mock_tools.assert_called_once()
+
+    async def test_quota_exceeded_falls_back_to_the_structured_solver_with_a_note(self):
+        # Must be non-trivial (contains prose) so the fast-path for "obviously
+        # simple" inputs doesn't skip the tool-calling path before this test
+        # ever gets to exercise the quota-exceeded sentinel handling.
+        problem = "If y = sin^-1(x), what is dy/dx?"
+        sympy_result = {
+            "problem": problem, "topic": "calculus_differentiation", "difficulty": "basic",
+            "steps": [], "answer": "1/sqrt(1 - x**2)", "latex_answer": "1/sqrt(1-x^2)",
+            "alternate_method": None, "formulas_used": [], "common_mistakes": [],
+            "similar_problems": [], "error": None,
         }
         with patch("app.api.routes.solve.solve_with_gemini_tools", return_value={"_quota_exceeded": True}), \
              patch("app.api.routes.solve.solve_expression", return_value=sympy_result), \
              patch("app.api.routes.solve.get_explanation", return_value=None):
             resp = self.client.post("/api/v1/solve", json={
-                "problem": "2+2", "session_id": "sess_test_tools_quota",
+                "problem": problem, "session_id": "sess_test_tools_quota",
             })
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        self.assertEqual(body["answer"], "4")
+        self.assertEqual(body["answer"], "1/sqrt(1 - x**2)")
         self.assertIn("structured solver", body["error"])
 
 

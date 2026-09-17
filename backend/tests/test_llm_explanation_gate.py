@@ -59,7 +59,9 @@ class FreeUsersGetRealLLMExplanationTests(unittest.IsolatedAsyncioTestCase):
              patch.object(llm_service.settings, "GEMINI_API_KEY", "AIzaSy" + "x" * 33), \
              patch.object(llm_service, "_call_gemini", side_effect=RuntimeError("transient failure")):
             first = await llm_service.get_explanation(problem, {"answer": "4"}, "intermediate", plan="free")
-        self.assertIn("*LLM error:", first)
+        self.assertIn(llm_service._GENERIC_FAILURE_NOTE, first)
+        # Must never leak the raw exception text or any provider name to the user.
+        self.assertNotIn("transient failure", first)
 
         with patch.object(llm_service.settings, "LLM_PROVIDER", "gemini"), \
              patch.object(llm_service.settings, "GEMINI_API_KEY", "AIzaSy" + "x" * 33), \
@@ -67,6 +69,23 @@ class FreeUsersGetRealLLMExplanationTests(unittest.IsolatedAsyncioTestCase):
             second = await llm_service.get_explanation(problem, {"answer": "4"}, "intermediate", plan="free")
         mock_call.assert_called_once()  # proves the second call wasn't served from a stale cache
         self.assertEqual(second, "the fix landed")
+
+    async def test_no_provider_name_ever_reaches_the_user_facing_explanation(self):
+        """
+        Confirmed live in production: a genuine call failure's exception
+        text ("No Gemini model responded successfully") was appended
+        directly into the user-visible explanation, naming the underlying
+        AI provider. The user must never be able to tell which AI tool (or
+        that a specific named one) powers this feature.
+        """
+        with patch.object(llm_service.settings, "LLM_PROVIDER", "gemini"), \
+             patch.object(llm_service.settings, "GEMINI_API_KEY", "AIzaSy" + "x" * 33), \
+             patch.object(llm_service, "_call_gemini", side_effect=RuntimeError("No AI model responded successfully")):
+            result = await llm_service.get_explanation(
+                "unique_probe_problem_no_provider_leak_test", {"answer": "4"}, "intermediate", plan="free",
+            )
+        for leaked_name in ("Gemini", "Anthropic", "Claude", "OpenAI", "GPT"):
+            self.assertNotIn(leaked_name, result)
 
 
 if __name__ == "__main__":

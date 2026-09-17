@@ -11,7 +11,10 @@ from app.core.auth import get_current_user
 from app.api.routes.history import history_owner
 from app.core.limiter import limiter
 from app.models.models import SolveHistory, User
-from app.services.math_engine import solve_expression, is_llm_first_problem, detect_difficulty as auto_detect_difficulty
+from app.services.math_engine import (
+    solve_expression, is_llm_first_problem, detect_difficulty as auto_detect_difficulty,
+    looks_like_prose, preprocess_problem,
+)
 from app.services.llm_service import get_explanation, llm_full_solve, solve_with_gemini_tools
 
 router = APIRouter()
@@ -154,7 +157,22 @@ async def solve_problem(
     # (no LLM configured) or the whole round trip fails outright (network
     # error, response never resolved to valid JSON) -- "never leave the
     # user with nothing" applies here same as everywhere else.
-    tool_result = await solve_with_gemini_tools(req.problem, explanation_level)
+    #
+    # Fast-path exception: an "obviously simple" input -- short, and with
+    # no natural-language ambiguity at all (looks_like_prose() is the same
+    # signal this app already relies on elsewhere to catch exactly that
+    # ambiguity) -- skips the multi-second LLM round trip entirely and goes
+    # straight to the free, instant structured solver below instead, which
+    # still gets a real LLM fallback if it turns out to fail. This can't
+    # reintroduce the misrouting bugs fixed earlier this session: it only
+    # ever fires for input that was already unambiguous before any topic
+    # detection ran, never for a word problem or unusual phrasing.
+    is_simple_and_unambiguous = (
+        len(req.problem) < 80 and not looks_like_prose(preprocess_problem(req.problem))
+    )
+    tool_result = None
+    if not is_simple_and_unambiguous:
+        tool_result = await solve_with_gemini_tools(req.problem, explanation_level)
 
     if tool_result and tool_result.get("_quota_exceeded"):
         loop = asyncio.get_running_loop()

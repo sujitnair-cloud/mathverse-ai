@@ -47,6 +47,21 @@ class QuotaExhaustedError(Exception):
     """Raised when all Gemini models return HTTP 429 (daily quota exhausted)."""
 
 
+# Deliberately name-free and detail-free: the user should never learn which
+# AI provider/model powers this feature, or see a raw exception string that
+# could reveal it (a provider's API URL, model name, etc. showing up in the
+# text). The real error is still logged server-side (print to stderr) --
+# only what reaches the response body is generic.
+_QUOTA_NOTE = (
+    "\n\n---\n> **Note:** AI explanation quota reached for today. "
+    "The structured solution above is always available. Quota resets at midnight UTC."
+)
+_GENERIC_FAILURE_NOTE = (
+    "\n\n---\n> **Note:** The full explanation couldn't be generated right now. "
+    "The structured solution above is always available."
+)
+
+
 # ── Difficulty-level instructions ──────────────────────────────────────────────
 DIFFICULTY_INSTRUCTIONS = {
     "kids":         "Teach a child in grades 1–5. Use one method, everyday words, and short sentences. Use at most one concrete model when helpful. Keep the explanation under 90 words, with at most three short steps for a simple problem. Preserve necessary reasoning and all requested parts; never sacrifice correctness to meet a length target. Avoid extra methods, jargon, decorative emojis, and unrelated practice questions.",
@@ -425,7 +440,7 @@ async def _gemini_generate(contents: list, tools: Optional[list] = None, max_tok
     global _LAST_GOOD_GEMINI_COMBO
     api_keys = _get_gemini_keys()
     if not api_keys:
-        raise RuntimeError("No Gemini API key configured")
+        raise RuntimeError("No AI provider configured")
 
     payload: dict = {
         "contents": contents,
@@ -455,7 +470,7 @@ async def _gemini_generate(contents: list, tools: Optional[list] = None, max_tok
                 print(f"[MathVerse] Cached Gemini combo failed ({e}); re-searching", file=sys.stderr)
             _LAST_GOOD_GEMINI_COMBO = None
 
-        last_err: Exception = RuntimeError("No Gemini model responded successfully")
+        last_err: Exception = RuntimeError("No AI model responded successfully")
         exhausted_key_count = 0
 
         for key_idx, api_key in enumerate(api_keys):
@@ -615,6 +630,7 @@ async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "i
     no provider configured, quota exhausted, or a request error -- never
     leaving the user with nothing. Successful LLM responses are cached 72h.
     """
+    import sys
     cache_key = _ck(problem, difficulty)
     cached = _cache_get(_EXPL_CACHE, cache_key)
     if cached is not None:
@@ -627,49 +643,41 @@ async def get_explanation(problem: str, sympy_result: dict, difficulty: str = "i
         try:
             result_text = await _call_anthropic(_build_prompt(problem, sympy_result, difficulty))
         except QuotaExhaustedError:
-            result_text = (
-                _rich_fallback(problem, sympy_result, difficulty)
-                + "\n\n---\n> **Note:** AI explanation quota reached for today. "
-                "The structured solution above is always available. Quota resets at midnight UTC."
-            )
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + _QUOTA_NOTE
         except Exception as e:
-            result_text = _rich_fallback(problem, sympy_result, difficulty) + f"\n\n---\n*LLM error: {e}*"
+            print(f"[MathVerse] get_explanation call failed: {e}", file=sys.stderr)
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + _GENERIC_FAILURE_NOTE
 
     elif provider == "openai" and _key_looks_real(settings.OPENAI_API_KEY):
         try:
             result_text = await _call_openai(_build_prompt(problem, sympy_result, difficulty))
         except QuotaExhaustedError:
-            result_text = (
-                _rich_fallback(problem, sympy_result, difficulty)
-                + "\n\n---\n> **Note:** AI explanation quota reached for today. Quota resets at midnight UTC."
-            )
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + _QUOTA_NOTE
         except Exception as e:
-            result_text = _rich_fallback(problem, sympy_result, difficulty) + f"\n\n---\n*LLM error: {e}*"
+            print(f"[MathVerse] get_explanation call failed: {e}", file=sys.stderr)
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + _GENERIC_FAILURE_NOTE
 
     elif provider == "gemini" and _get_gemini_keys():
         try:
             result_text = await _call_gemini(_build_prompt(problem, sympy_result, difficulty))
         except QuotaExhaustedError:
-            result_text = (
-                _rich_fallback(problem, sympy_result, difficulty)
-                + "\n\n---\n> **Note:** AI explanation quota reached for today. "
-                "The structured solution above is always available. Quota resets at midnight UTC."
-            )
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + _QUOTA_NOTE
         except Exception as e:
-            result_text = _rich_fallback(problem, sympy_result, difficulty) + f"\n\n---\n*LLM error: {e}*"
+            print(f"[MathVerse] get_explanation call failed: {e}", file=sys.stderr)
+            result_text = _rich_fallback(problem, sympy_result, difficulty) + _GENERIC_FAILURE_NOTE
 
     if result_text is None:
         result_text = _rich_fallback(problem, sympy_result, difficulty)
 
     # Cache only successful full LLM responses -- not a quota notice, and not
-    # a genuine call failure either ("*LLM error: ...*", appended by every
+    # a genuine call failure either (_GENERIC_FAILURE_NOTE, appended by every
     # except-Exception branch above). Caching a transient failure for 72h
     # meant a fixed underlying bug (e.g. the Gemini model-list going stale)
     # kept serving the old cached failure for that exact problem text long
     # after the real fix was deployed -- confirmed directly: a previously-
     # asked problem kept failing after a fix that a brand-new problem text
     # picked up immediately.
-    if "Quota resets at midnight UTC" not in result_text and "*LLM error:" not in result_text:
+    if _QUOTA_NOTE not in result_text and _GENERIC_FAILURE_NOTE not in result_text:
         _cache_set(_EXPL_CACHE, cache_key, result_text)
 
     return result_text
