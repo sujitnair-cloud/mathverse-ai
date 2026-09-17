@@ -219,15 +219,13 @@ class GeminiToolsIsThePrimaryPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("structured solver", body["error"])
 
 
-class LifetimeFreeLimitTests(unittest.IsolatedAsyncioTestCase):
+class DailyFreeLimitTests(unittest.IsolatedAsyncioTestCase):
     """
-    The free-tier solve limit is a one-time lifetime allowance, not a
-    daily-refreshing quota -- a signed-in free account that has used its
-    full allowance must be blocked even if daily_solves was just reset to
-    0 a moment ago, and an anonymous session gets the same lifetime
-    allowance tied to its session_id instead of an account. Uses the real
-    FREE_LIFETIME_LIMIT constant rather than a hardcoded number so this
-    doesn't need updating every time that limit is adjusted.
+    The free-tier solve limit is a daily quota on a rolling 24h window, not
+    a one-time lifetime allowance -- anonymous visitors get ANON_DAILY_LIMIT
+    (15), signed-in free accounts get FREE_DAILY_LIMIT (20). Uses the real
+    constants rather than hardcoded numbers so this doesn't need updating
+    every time a limit is adjusted.
     """
 
     async def asyncSetUp(self):
@@ -269,62 +267,93 @@ class LifetimeFreeLimitTests(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/solve", json={"problem": problem, "session_id": session_id}
             )
 
-    async def test_signed_in_free_user_blocked_at_lifetime_limit_even_right_after_daily_reset(self):
+    async def test_signed_in_free_user_blocked_at_daily_limit(self):
+        from datetime import datetime, timezone
         from app.models.models import User
-        from app.api.routes.solve import FREE_LIFETIME_LIMIT
+        from app.api.routes.solve import FREE_DAILY_LIMIT
         user = User(
             google_id="g-limit", email="limit@example.com", subscription_plan="free",
-            total_solves=FREE_LIFETIME_LIMIT, daily_solves=0, daily_solves_reset_at=None,
+            daily_solves=FREE_DAILY_LIMIT, daily_solves_reset_at=datetime.now(timezone.utc),
         )
         self.app.dependency_overrides[self.get_current_user_key] = lambda: user
         resp = await self._solve()
         self.assertEqual(resp.status_code, 429)
         self.assertIn("Upgrade", resp.json()["detail"])
 
-    async def test_signed_in_free_user_allowed_just_under_the_limit(self):
+    async def test_signed_in_free_user_allowed_just_under_the_daily_limit(self):
+        from datetime import datetime, timezone
         from app.models.models import User
-        from app.api.routes.solve import FREE_LIFETIME_LIMIT
+        from app.api.routes.solve import FREE_DAILY_LIMIT
         user = User(
             google_id="g-ok", email="ok@example.com", subscription_plan="free",
-            total_solves=FREE_LIFETIME_LIMIT - 1, daily_solves=0,
+            daily_solves=FREE_DAILY_LIMIT - 1, daily_solves_reset_at=datetime.now(timezone.utc),
         )
         self.app.dependency_overrides[self.get_current_user_key] = lambda: user
         resp = await self._solve()
         self.assertEqual(resp.status_code, 200)
 
-    async def test_paid_plan_is_never_blocked_by_the_lifetime_limit(self):
+    async def test_signed_in_free_user_gets_a_fresh_quota_after_24h(self):
+        from datetime import datetime, timedelta, timezone
+        from app.models.models import User
+        from app.api.routes.solve import FREE_DAILY_LIMIT
+        user = User(
+            google_id="g-reset", email="reset@example.com", subscription_plan="free",
+            daily_solves=FREE_DAILY_LIMIT,  # exhausted, but the reset window has passed
+            daily_solves_reset_at=datetime.now(timezone.utc) - timedelta(days=1, minutes=1),
+        )
+        self.app.dependency_overrides[self.get_current_user_key] = lambda: user
+        resp = await self._solve()
+        self.assertEqual(resp.status_code, 200)
+
+    async def test_paid_plan_is_never_blocked_by_the_daily_limit(self):
         from app.models.models import User
         user = User(
             google_id="g-pro", email="pro@example.com", subscription_plan="pro",
-            total_solves=5000,
+            daily_solves=5000,
         )
         self.app.dependency_overrides[self.get_current_user_key] = lambda: user
         resp = await self._solve()
         self.assertEqual(resp.status_code, 200)
 
-    async def test_anonymous_session_blocked_after_lifetime_limit_solves(self):
+    async def test_anonymous_session_blocked_after_daily_limit_solves(self):
         from app.models.models import SolveHistory
         from app.core.auth import get_current_user
-        from app.api.routes.solve import FREE_LIFETIME_LIMIT
+        from app.api.routes.solve import ANON_DAILY_LIMIT
         self.app.dependency_overrides[get_current_user] = lambda: None
         async with self.sessions() as session:
-            for i in range(FREE_LIFETIME_LIMIT):
+            for i in range(ANON_DAILY_LIMIT):
                 session.add(SolveHistory(session_id="sess_full", problem=f"p{i}", result={}))
             await session.commit()
         resp = await self._solve(session_id="sess_full")
         self.assertEqual(resp.status_code, 429)
         self.assertIn("upgrade", resp.json()["detail"].lower())
 
-    async def test_anonymous_session_allowed_just_under_the_limit(self):
+    async def test_anonymous_session_allowed_just_under_the_daily_limit(self):
         from app.models.models import SolveHistory
         from app.core.auth import get_current_user
-        from app.api.routes.solve import FREE_LIFETIME_LIMIT
+        from app.api.routes.solve import ANON_DAILY_LIMIT
         self.app.dependency_overrides[get_current_user] = lambda: None
         async with self.sessions() as session:
-            for i in range(FREE_LIFETIME_LIMIT - 1):
+            for i in range(ANON_DAILY_LIMIT - 1):
                 session.add(SolveHistory(session_id="sess_almost_full", problem=f"p{i}", result={}))
             await session.commit()
         resp = await self._solve(session_id="sess_almost_full")
+        self.assertEqual(resp.status_code, 200)
+
+    async def test_anonymous_session_gets_a_fresh_quota_after_24h(self):
+        from datetime import datetime, timedelta, timezone
+        from app.models.models import SolveHistory
+        from app.core.auth import get_current_user
+        from app.api.routes.solve import ANON_DAILY_LIMIT
+        self.app.dependency_overrides[get_current_user] = lambda: None
+        old = datetime.now(timezone.utc) - timedelta(days=2)
+        async with self.sessions() as session:
+            for i in range(ANON_DAILY_LIMIT):
+                # Exhausted the limit, but every one of these rows is
+                # outside the rolling 24h window -- must not count.
+                session.add(SolveHistory(session_id="sess_old", problem=f"p{i}", result={}, created_at=old))
+            await session.commit()
+        resp = await self._solve(session_id="sess_old")
         self.assertEqual(resp.status_code, 200)
 
 

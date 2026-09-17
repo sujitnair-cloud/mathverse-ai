@@ -88,12 +88,13 @@ async def get_config():
 
 @router.get("/status")
 async def get_status(current_user: User = Depends(require_user)):
-    # Lifetime, not daily -- matches the actual gate enforced in solve.py
-    # (total_solves vs. PLAN_LIMITS), not the daily_solves rolling stat.
+    # Daily, rolling 24h window -- matches the actual gate enforced in
+    # solve.py (daily_solves vs. PLAN_LIMITS). total_solves is tracked
+    # separately as a lifetime stat only, not a gate.
     return {
         "plan": current_user.subscription_plan,
         "status": current_user.subscription_status,
-        "solves_used": current_user.total_solves or 0,
+        "solves_used": current_user.daily_solves or 0,
         "solves_limit": PLAN_LIMITS.get(current_user.subscription_plan, PLAN_LIMITS["free"]),
         "expires_at": current_user.subscription_expires_at,
     }
