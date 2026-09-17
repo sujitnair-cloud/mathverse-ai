@@ -393,16 +393,25 @@ async def _list_gemini_models(client: httpx.AsyncClient, api_key: str) -> list:
     return sorted(dict.fromkeys(names), key=_sort_key)
 
 
-async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
+async def _gemini_generate(contents: list, tools: Optional[list] = None, max_tokens: int = 1024) -> dict:
+    """
+    Low-level Gemini call shared by both the plain-text path (_call_gemini)
+    and the tool-calling path (_call_gemini_with_tools) -- returns the raw
+    parsed response body so a caller can inspect it for either a text part
+    or a functionCall part. Tries every discovered/hardcoded model across
+    both API versions and all three known auth styles until one responds.
+    """
     import sys
     api_keys = _get_gemini_keys()
     if not api_keys:
         raise RuntimeError("No Gemini API key configured")
 
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
+    payload: dict = {
+        "contents": contents,
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
+    if tools:
+        payload["tools"] = tools
     hardcoded_models = [
         "gemini-2.5-flash-lite",
         settings.GEMINI_MODEL,
@@ -450,16 +459,9 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
                                 quota_hit = True
                                 break
                             resp.raise_for_status()
-                            parts = resp.json()["candidates"][0]["content"]["parts"]
-                            text = ""
-                            for part in parts:
-                                if not part.get("thought", False) and "text" in part:
-                                    text = part["text"]
-                                    break
-                            if not text:
-                                text = parts[-1].get("text", "")
+                            body = resp.json()
                             print(f"[MathVerse] Gemini REST success: {key_label} {model} ({api_ver})", file=sys.stderr)
-                            return text
+                            return body
                         except Exception as e:
                             last_err = e
                             continue
@@ -475,6 +477,19 @@ async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
                 "Add more GEMINI_API_KEYS or upgrade to a paid plan for unlimited access."
             )
     raise last_err
+
+
+def _first_part_text(body: dict) -> str:
+    parts = body["candidates"][0]["content"]["parts"]
+    for part in parts:
+        if not part.get("thought", False) and "text" in part:
+            return part["text"]
+    return parts[-1].get("text", "") if parts else ""
+
+
+async def _call_gemini(prompt: str, max_tokens: int = 1024) -> str:
+    body = await _gemini_generate([{"parts": [{"text": prompt}]}], max_tokens=max_tokens)
+    return _first_part_text(body)
 
 
 def _repair_json_backslashes(s: str) -> str:
@@ -507,6 +522,38 @@ def _repair_json_backslashes(s: str) -> str:
             result.append(s[i])
             i += 1
     return ''.join(result)
+
+
+def _extract_json_object(raw: str) -> Optional[dict]:
+    """
+    Shared by every path that asks an LLM to reply with JSON: strips a
+    markdown code fence if present, takes the outermost {...} span, and
+    retries once with backslash repair (LaTeX like \\cdot, \\sqrt breaks
+    json.loads on the first attempt) before giving up.
+    """
+    import re as _re
+    import sys
+    if not raw:
+        return None
+    raw_clean = _re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re.MULTILINE)
+    raw_clean = _re.sub(r"```\s*$", "", raw_clean.strip(), flags=_re.MULTILINE)
+
+    start = raw_clean.find("{")
+    end = raw_clean.rfind("}") + 1
+    if start == -1 or end <= start:
+        print(f"[MathVerse] _extract_json_object: no JSON braces found", file=sys.stderr)
+        return None
+
+    json_str = raw_clean[start:end]
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e1:
+        print(f"[MathVerse] _extract_json_object: parse failed ({e1}); trying backslash repair", file=sys.stderr)
+        try:
+            return json.loads(_repair_json_backslashes(json_str))
+        except json.JSONDecodeError as e2:
+            print(f"[MathVerse] _extract_json_object: repaired JSON also failed ({e2})", file=sys.stderr)
+            return None
 
 
 def _key_looks_real(key: str) -> bool:
@@ -700,31 +747,10 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
 
         print(f"[MathVerse] llm_full_solve raw (first 300 chars): {raw[:300]!r}", file=sys.stderr)
 
-        if raw:
-            raw_clean = _re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=_re.MULTILINE)
-            raw_clean = _re.sub(r"```\s*$", "", raw_clean.strip(), flags=_re.MULTILINE)
-
-            start = raw_clean.find("{")
-            end = raw_clean.rfind("}") + 1
-            if start == -1 or end <= start:
-                print(f"[MathVerse] llm_full_solve: no JSON braces found", file=sys.stderr)
-            else:
-                json_str = raw_clean[start:end]
-                parsed = None
-                try:
-                    parsed = json.loads(json_str)
-                except json.JSONDecodeError as e1:
-                    print(f"[MathVerse] llm_full_solve: JSON parse failed ({e1}); trying backslash repair", file=sys.stderr)
-                    try:
-                        repaired = _repair_json_backslashes(json_str)
-                        parsed = json.loads(repaired)
-                    except json.JSONDecodeError as e2:
-                        print(f"[MathVerse] llm_full_solve: repaired JSON also failed ({e2})", file=sys.stderr)
-                        print(f"[MathVerse] Repaired JSON (first 400 chars): {repaired[:400]!r}", file=sys.stderr)
-
-                if parsed is not None:
-                    _cache_set(_SOLVE_CACHE, cache_key, parsed)
-                    return parsed
+        parsed = _extract_json_object(raw)
+        if parsed is not None:
+            _cache_set(_SOLVE_CACHE, cache_key, parsed)
+            return parsed
 
     except QuotaExhaustedError as qe:
         print(f"[MathVerse] llm_full_solve: quota exhausted — {qe}", file=sys.stderr)
@@ -733,6 +759,133 @@ LaTeX backslash commands like \\frac or \\times (they break JSON parsing).
     except Exception as e:
         print(f"[MathVerse] llm_full_solve error: {e}", file=sys.stderr)
 
+    return None
+
+
+_SOLVE_TOOL_DECLARATION = {
+    "functionDeclarations": [{
+        "name": "solve_math",
+        "description": (
+            "Solve a single, clean, unambiguous math expression, equation, or short "
+            "instruction EXACTLY using a symbolic math engine. ALWAYS call this for "
+            "every actual calculation -- never compute or simplify by hand -- so the "
+            "final numeric/symbolic answer is guaranteed correct rather than guessed. "
+            "Rephrase the problem into simple standard notation first, e.g. "
+            "'d/dx of asin(x)', 'integrate 3x^2 from 0 to 1', 'solve 2x+3=11', "
+            "'mean of 2,4,6,8,10', '5 nCr 2', 'det [[1,2],[3,4]]'. For a multi-part "
+            "problem, call this once per part."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "A single clean math expression/equation/instruction in standard notation.",
+                },
+            },
+            "required": ["expression"],
+        },
+    }],
+}
+
+
+def _run_solve_tool(expression: str) -> dict:
+    """
+    Executes the solve_math tool call. Reuses solve_expression() unchanged --
+    the exact same hardened entry point every direct user request already
+    goes through (reject_unsafe_expression, prose rejection, etc.) -- since
+    this argument is still just a string that ultimately traces back to
+    user-influenced input, same RCE surface as any other path, so it must
+    go through the same guards rather than a new, unaudited code path.
+    """
+    from app.services.math_engine import solve_expression
+    try:
+        result = solve_expression(expression)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if result.get("error"):
+        return {"ok": False, "error": result["error"]}
+    return {
+        "ok": True,
+        "answer": result.get("answer"),
+        "steps": [
+            {"description": s.get("description"), "expression": s.get("expression")}
+            for s in result.get("steps", [])
+        ],
+    }
+
+
+_TOOL_SYSTEM_INSTRUCTION_TEMPLATE = """You are MathVerse AI, a rigorous, friendly math tutor. You will be given a math problem in any phrasing or notation the user chose to write it in.
+
+ALWAYS call the solve_math tool for every actual calculation -- never compute or simplify by hand -- so your final numeric/symbolic answer is guaranteed correct rather than guessed. You may call it more than once for a multi-part problem, or if a call comes back with an error, rephrase the expression more simply and try again.
+
+Once you have every tool result you need, respond with ONLY valid JSON (no markdown code fence) matching exactly this shape:
+{schema}
+
+The "explanation" field should read like a great tutor talking a {difficulty}-level learner through it -- clear, simple, well-organized, in the spirit of how ChatGPT explains math: state the concept, walk through the reasoning in plain language, then the answer. The "answer" field must come from your tool result(s), never invented."""
+
+
+async def solve_with_gemini_tools(problem: str, difficulty: str = "intermediate") -> Optional[dict]:
+    """
+    Primary solving path: Gemini reads the ORIGINAL problem directly -- any
+    phrasing or notation, no regex-based topic routing to go stale or miss a
+    case -- and calls the solve_math tool for the actual computation
+    whenever it needs one, so the final answer is exact rather than
+    hallucinated. Returns None on any failure (provider not configured,
+    quota exhausted mid-call already handled via the sentinel dict, network
+    error, or a final response that still isn't valid JSON after repair) so
+    the caller can fall back to the direct structured-solver path --
+    consistent with this app's "never leave the user with nothing" policy.
+    """
+    import sys
+    provider = settings.LLM_PROVIDER.lower()
+    if provider != "gemini" or not _get_gemini_keys():
+        return None  # tool-calling is currently implemented for Gemini only
+
+    schema = json.dumps({
+        "topic": "e.g. calculus_differentiation",
+        "difficulty": difficulty,
+        "answer": "the final answer, taken from the tool result(s)",
+        "latex_answer": "LaTeX for the final answer",
+        "steps": [{"step": 1, "description": "...", "expression": "...", "latex": "..."}],
+        "formulas_used": ["..."],
+        "common_mistakes": ["..."],
+        "similar_problems": ["..."],
+        "explanation": "the full tutor-style walkthrough described above",
+    })
+    system_instruction = _TOOL_SYSTEM_INSTRUCTION_TEMPLATE.format(schema=schema, difficulty=difficulty)
+
+    contents = [{"role": "user", "parts": [{"text": f"{system_instruction}\n\nProblem: {problem}"}]}]
+
+    for round_num in range(4):  # cap tool-call round trips against a runaway loop
+        try:
+            body = await _gemini_generate(contents, tools=[_SOLVE_TOOL_DECLARATION], max_tokens=3072)
+        except QuotaExhaustedError:
+            return {"_quota_exceeded": True}
+        except Exception as e:
+            print(f"[MathVerse] solve_with_gemini_tools: Gemini call failed: {e}", file=sys.stderr)
+            return None
+
+        try:
+            parts = body["candidates"][0]["content"]["parts"]
+        except (KeyError, IndexError):
+            print(f"[MathVerse] solve_with_gemini_tools: unexpected response shape", file=sys.stderr)
+            return None
+
+        function_calls = [p["functionCall"] for p in parts if "functionCall" in p]
+        if not function_calls:
+            return _extract_json_object(_first_part_text(body))
+
+        contents.append({"role": "model", "parts": parts})
+        response_parts = []
+        for call in function_calls:
+            expr = call.get("args", {}).get("expression", "")
+            tool_result = _run_solve_tool(expr)
+            print(f"[MathVerse] round {round_num}: solve_math({expr!r}) -> {tool_result}", file=sys.stderr)
+            response_parts.append({"functionResponse": {"name": call["name"], "response": tool_result}})
+        contents.append({"role": "user", "parts": response_parts})
+
+    print(f"[MathVerse] solve_with_gemini_tools: exceeded tool-call round trip limit", file=sys.stderr)
     return None
 
 

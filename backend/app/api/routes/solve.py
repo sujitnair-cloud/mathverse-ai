@@ -12,7 +12,7 @@ from app.api.routes.history import history_owner
 from app.core.limiter import limiter
 from app.models.models import SolveHistory, User
 from app.services.math_engine import solve_expression, is_llm_first_problem, detect_difficulty as auto_detect_difficulty
-from app.services.llm_service import get_explanation, llm_full_solve
+from app.services.llm_service import get_explanation, llm_full_solve, solve_with_gemini_tools
 
 router = APIRouter()
 
@@ -144,7 +144,30 @@ async def solve_problem(
         "error": None,
     }
 
-    if is_llm_first_problem(req.problem):
+    # Primary path: Gemini reads the problem directly -- any phrasing or
+    # notation, no regex-based topic routing to go stale or miss a case --
+    # and calls the structured solver as a verified-computation tool
+    # whenever it needs one, so the final answer is exact rather than
+    # hallucinated. This replaces needing a new hand-written pattern for
+    # every new phrasing someone happens to type. Falls back to the older
+    # SymPy-first / word-problem flow below when this path is unavailable
+    # (no LLM configured) or the whole round trip fails outright (network
+    # error, response never resolved to valid JSON) -- "never leave the
+    # user with nothing" applies here same as everywhere else.
+    tool_result = await solve_with_gemini_tools(req.problem, explanation_level)
+
+    if tool_result and tool_result.get("_quota_exceeded"):
+        loop = asyncio.get_running_loop()
+        result.update(await loop.run_in_executor(None, solve_expression, req.problem))
+        result["error"] = (
+            "Daily AI quota reached — answered via the structured solver instead. "
+            "Quota resets at midnight UTC."
+        )
+    elif tool_result:
+        explanation = tool_result.pop("explanation", None)
+        result.update(tool_result)
+
+    elif is_llm_first_problem(req.problem):
         # Word problem / proof / advanced request -- for everyone now, not
         # just paid plans. Previously free/anonymous users only ever got the
         # structured (SymPy) solver here, which has no real handling for this
@@ -159,8 +182,10 @@ async def solve_problem(
         # which categories of problem get a real attempt.
         llm_result = await llm_full_solve(req.problem, explanation_level)
         if llm_result and llm_result.get("_quota_exceeded"):
+            loop = asyncio.get_running_loop()
+            result.update(await loop.run_in_executor(None, solve_expression, req.problem))
             result["error"] = (
-                "Daily AI quota reached. Your question will be answered via the structured solver. "
+                "Daily AI quota reached — answered via the structured solver instead. "
                 "Quota resets at midnight UTC."
             )
         elif llm_result:

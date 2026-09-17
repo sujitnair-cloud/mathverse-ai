@@ -55,7 +55,8 @@ class LLMFallbackAvailableToFreeUsersTests(unittest.IsolatedAsyncioTestCase):
             "answer": "42", "latex_answer": "42", "steps": [], "explanation": "fixture",
             "formulas_used": [], "common_mistakes": [], "similar_problems": [],
         }
-        with patch("app.api.routes.solve.solve_expression", return_value=failed_sympy_result), \
+        with patch("app.api.routes.solve.solve_with_gemini_tools", return_value=None), \
+             patch("app.api.routes.solve.solve_expression", return_value=failed_sympy_result), \
              patch("app.api.routes.solve.llm_full_solve", return_value=llm_result) as mock_llm, \
              patch("app.api.routes.solve.get_explanation", return_value=None):
             resp = self.client.post("/api/v1/solve", json={
@@ -84,7 +85,8 @@ class LLMFallbackAvailableToFreeUsersTests(unittest.IsolatedAsyncioTestCase):
             "answer": "y = x**3 + 2", "latex_answer": "y = x^3 + 2", "steps": [],
             "explanation": "fixture", "formulas_used": [], "common_mistakes": [], "similar_problems": [],
         }
-        with patch("app.api.routes.solve.llm_full_solve", return_value=llm_result) as mock_llm, \
+        with patch("app.api.routes.solve.solve_with_gemini_tools", return_value=None), \
+             patch("app.api.routes.solve.llm_full_solve", return_value=llm_result) as mock_llm, \
              patch("app.api.routes.solve.get_explanation", return_value=None):
             resp = self.client.post("/api/v1/solve", json={
                 "problem": "Solve the differential equation dy/dx = 3x^2 given y=2 when x=0",
@@ -95,6 +97,82 @@ class LLMFallbackAvailableToFreeUsersTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["answer"], "y = x**3 + 2")
         self.assertIsNone(body["error"])
         mock_llm.assert_called_once()
+
+
+class GeminiToolsIsThePrimaryPathTests(unittest.IsolatedAsyncioTestCase):
+    """
+    solve_with_gemini_tools() is now tried first for every request, not
+    just detected structured-solver failures -- Gemini reads the problem
+    directly in any phrasing/notation and calls the structured solver as a
+    verified-computation tool, so a new phrasing doesn't need a new
+    hand-written pattern to be answered correctly.
+    """
+
+    async def asyncSetUp(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from app.core.database import Base, get_db
+        from app.core.auth import get_current_user
+        from app.api.routes import solve
+
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async def db():
+            async with sessions() as session:
+                try:
+                    yield session
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    raise
+
+        self.app = FastAPI()
+        self.app.include_router(solve.router, prefix="/api/v1")
+        self.app.dependency_overrides[get_db] = db
+        self.app.dependency_overrides[get_current_user] = lambda: None
+        self.client = TestClient(self.app)
+
+    async def asyncTearDown(self):
+        self.client.close()
+        await self.engine.dispose()
+
+    async def test_result_from_the_tool_calling_path_is_used_and_sympy_is_never_touched(self):
+        tool_result = {
+            "answer": "1/sqrt(1 - x**2)", "latex_answer": "1/sqrt(1-x^2)", "steps": [],
+            "explanation": "fixture", "formulas_used": [], "common_mistakes": [], "similar_problems": [],
+        }
+        with patch("app.api.routes.solve.solve_with_gemini_tools", return_value=tool_result) as mock_tools, \
+             patch("app.api.routes.solve.solve_expression") as mock_sympy, \
+             patch("app.api.routes.solve.get_explanation", return_value=None):
+            resp = self.client.post("/api/v1/solve", json={
+                "problem": "If y = sin^-1(x), what is dy/dx?",
+                "session_id": "sess_test_tools_primary",
+            })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["answer"], "1/sqrt(1 - x**2)")
+        mock_tools.assert_called_once()
+        mock_sympy.assert_not_called()
+
+    async def test_quota_exceeded_falls_back_to_the_structured_solver_with_a_note(self):
+        sympy_result = {
+            "problem": "2+2", "topic": "algebra_general", "difficulty": "basic",
+            "steps": [], "answer": "4", "latex_answer": "4", "alternate_method": None,
+            "formulas_used": [], "common_mistakes": [], "similar_problems": [], "error": None,
+        }
+        with patch("app.api.routes.solve.solve_with_gemini_tools", return_value={"_quota_exceeded": True}), \
+             patch("app.api.routes.solve.solve_expression", return_value=sympy_result), \
+             patch("app.api.routes.solve.get_explanation", return_value=None):
+            resp = self.client.post("/api/v1/solve", json={
+                "problem": "2+2", "session_id": "sess_test_tools_quota",
+            })
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["answer"], "4")
+        self.assertIn("structured solver", body["error"])
 
 
 class LifetimeFreeLimitTests(unittest.IsolatedAsyncioTestCase):
@@ -141,7 +219,8 @@ class LifetimeFreeLimitTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.dispose()
 
     async def _solve(self, problem="2 + 2", session_id="sess_test"):
-        with patch("app.api.routes.solve.get_explanation", return_value=None):
+        with patch("app.api.routes.solve.solve_with_gemini_tools", return_value=None), \
+             patch("app.api.routes.solve.get_explanation", return_value=None):
             return self.client.post(
                 "/api/v1/solve", json={"problem": problem, "session_id": session_id}
             )
