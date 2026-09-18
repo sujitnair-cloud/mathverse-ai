@@ -20,8 +20,8 @@ const PLANS = [
     description: 'Perfect for casual learners',
     cta: 'Get started free',
     features: [
-      { text: '6 AI solves without sign-in', included: true },
-      { text: '10 AI solves per day (signed in)', included: true },
+      { text: '15 AI solves per day without sign-in', included: true },
+      { text: '20 AI solves per day (signed in)', included: true },
       { text: 'Step-by-step solutions', included: true },
       { text: 'Formula library', included: true },
       { text: '5 quiz questions per session', included: true },
