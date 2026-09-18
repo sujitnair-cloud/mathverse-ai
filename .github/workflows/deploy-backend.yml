@@ -18,7 +18,31 @@ on:
   workflow_dispatch: {} # allows a manual test run from the Actions tab
 
 jobs:
+  test:
+    # A quality gate that was previously entirely absent: every push to
+    # backend/ deployed straight to production with zero automated check,
+    # even though 130 passing tests already exist in the repo. A failing
+    # step stops the job by default, so this blocks the deploy job below
+    # (via `needs:`) whenever a real regression slips through.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        working-directory: backend
+        run: python -m unittest discover -s tests
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
